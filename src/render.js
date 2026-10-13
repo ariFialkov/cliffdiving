@@ -327,127 +327,90 @@ export class Renderer {
     const pts = d.rig.points;
     if (!pts) return;
     const [sx, sy] = this.toScreen(d.x, d.y);
-    if (sx < -150 || sx > this.w + 150 || sy < -200 || sy > this.h + 200) return;
-    const ink = '#1b1d2a';
-    const lw = Math.max(2, ppm * 0.07);
+    if (sx < -200 || sx > this.w + 200 || sy < -250 || sy > this.h + 250) return;
+    const lw = Math.max(2, ppm * 0.075);
     const S = (p) => this.toScreen(p.x, p.y);
-    const line = (...ps) => {
+    const path = (list) => {
       ctx.beginPath();
-      ps.forEach((p, i) => {
+      list.forEach((p, i) => {
         const [x, y] = S(p);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
-      ctx.stroke();
     };
+    const avgZ = (list) => list.reduce((a, p) => a + p.z, 0) / list.length;
+    const inkFor = (z) => {
+      // Limbs turned away from the camera are a touch lighter so crossings read.
+      const t = clamp(-z / 0.12, 0, 1);
+      const c = Math.round(27 + t * 45);
+      return `rgb(${c},${c + 2},${c + 15})`;
+    };
+
+    const items = [];
+    const limb = (list) => items.push({ z: avgZ(list), draw: () => {
+      ctx.strokeStyle = inkFor(avgZ(list));
+      ctx.lineWidth = lw;
+      path(list);
+      ctx.stroke();
+    } });
+    limb([pts.hip, pts.kneeF, pts.ankF, pts.toeF]);
+    limb([pts.hip, pts.kneeB, pts.ankB, pts.toeB]);
+    limb([pts.shoulder, pts.elbF, pts.wrF]);
+    limb([pts.shoulder, pts.elbB, pts.wrB]);
+    const spine = [pts.hip, pts.chest, pts.neck, pts.headC];
+    const torsoZ = avgZ(spine);
+    items.push({ z: torsoZ - 0.001, draw: () => {
+      ctx.strokeStyle = '#1b1d2a';
+      ctx.lineWidth = lw;
+      path(spine);
+      ctx.stroke();
+    } });
+    // Speedo sits over the hips and the tops of both legs.
+    const speedo = [pts.waistF, pts.thighF, pts.crotch, pts.thighB, pts.waistB];
+    const legTopZ = Math.max(pts.thighF.z, pts.thighB.z, torsoZ);
+    items.push({ z: legTopZ + 0.0005, draw: () => {
+      ctx.fillStyle = d.color;
+      ctx.strokeStyle = d.color;
+      ctx.lineWidth = lw * 1.25;
+      path(speedo);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    } });
+    // Head: a plain circle. Hair outline sits just behind it unless the head is turned toward us.
+    items.push({ z: pts.headC.z + 0.002, draw: () => {
+      const [hx, hy] = S(pts.headC);
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#1b1d2a';
+      ctx.lineWidth = lw * 0.75;
+      ctx.beginPath();
+      ctx.arc(hx, hy, BONES.headR * ppm, 0, TAU);
+      ctx.fill();
+      ctx.stroke();
+    } });
+    items.push({ z: Math.max(pts.hairDepth, -10) + (pts.hairDepth > pts.headC.z + 0.02 ? 0.003 : 0), draw: () => this.drawHair(ctx, d, lw) });
+
+    items.sort((a, b) => a.z - b.z);
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    const t = this.time;
-    const underwater = d.state === 'entering';
-    if (underwater) ctx.globalAlpha = 0.85;
-
-    // Back limbs first (slightly lighter so depth reads).
-    ctx.lineWidth = lw;
-    ctx.strokeStyle = '#3a3d4f';
-    line(pts.hip, pts.kneeB, pts.ankB, pts.toeB);
-    line(pts.shoulder, pts.elbB, pts.wrB);
-    // Hair strands behind the head are drawn before the head.
-    this.drawHair(ctx, d, 'back');
-    // Torso + neck.
-    ctx.strokeStyle = ink;
-    line(pts.hip, pts.chest, pts.neck);
-    // Speedo: a chunky short stroke at the hips in the team colour.
-    ctx.strokeStyle = d.color;
-    ctx.lineWidth = lw * 2.1;
-    const sp = pts.local;
-    const spTop = { x: sp.hip.x + Math.sin(d.rig.angles.spine1) * 0.1, y: sp.hip.y + Math.cos(d.rig.angles.spine1) * 0.1 };
-    const spF = { x: sp.hip.x + Math.sin(d.rig.angles.legFu) * 0.12, y: sp.hip.y + Math.cos(d.rig.angles.legFu) * 0.12 };
-    const spB = { x: sp.hip.x + Math.sin(d.rig.angles.legBu) * 0.12, y: sp.hip.y + Math.cos(d.rig.angles.legBu) * 0.12 };
-    const w = (p) => {
-      const q = this.rigToWorld(d, p);
-      return q;
-    };
-    line(w(spB), w(sp.hip), w(spF));
-    line(w(spTop), w(sp.hip));
-    // Front limbs.
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = lw;
-    line(pts.hip, pts.kneeF, pts.ankF, pts.toeF);
-    line(pts.shoulder, pts.elbF, pts.wrF);
-    // Head.
-    const [hx, hy] = S(pts.headC);
-    const hr = BONES.headR * ppm;
-    ctx.fillStyle = '#fbe9d6';
-    ctx.beginPath();
-    ctx.arc(hx, hy, hr, 0, TAU);
-    ctx.fill();
-    ctx.lineWidth = lw * 0.9;
-    ctx.stroke();
-    // Face: eyes and mouth, oriented with the head.
-    const fwd = pts.headFwd;
-    const up = { x: -pts.headUp.x, y: -pts.headUp.y }; // screen-space "up" on the face (y grows down)
-    const ex = hx + (fwd.x * 0.045 + up.x * 0.02) * ppm;
-    const ey = hy + (fwd.y * 0.045 + up.y * 0.02) * ppm;
-    const nervous = d.state === 'ready' || d.state === 'hesitate' || d.state === 'crouch';
-    const closed = underwater || d.rig.blink > 0 || (d.locked && d.state === 'airborne');
-    ctx.fillStyle = ink;
-    ctx.strokeStyle = ink;
-    ctx.lineWidth = Math.max(1.5, lw * 0.5);
-    const eye = (ox, oy) => {
-      const x = ex + (fwd.x * ox + up.x * oy) * ppm;
-      const y = ey + (fwd.y * ox + up.y * oy) * ppm;
-      if (closed) {
-        ctx.beginPath();
-        ctx.moveTo(x - fwd.x * 0.015 * ppm, y - fwd.y * 0.015 * ppm);
-        ctx.lineTo(x + fwd.x * 0.015 * ppm, y + fwd.y * 0.015 * ppm);
-        ctx.stroke();
-      } else {
-        ctx.beginPath();
-        ctx.arc(x, y, Math.max(1.2, ppm * 0.016), 0, TAU);
-        ctx.fill();
-      }
-    };
-    eye(0, 0);
-    eye(0.05, 0.005);
+    if (d.state === 'entering') ctx.globalAlpha = 0.85;
+    for (const it of items) it.draw();
+    // A bead of sweat while working up the nerve at the edge.
+    const nervous = d.state === 'ready' || d.state === 'hesitate' || d.state === 'charging';
     if (nervous) {
-      // Raised worried brows and a wobbly mouth.
-      ctx.beginPath();
-      ctx.moveTo(ex + (fwd.x * -0.01 + up.x * 0.04) * ppm, ey + (fwd.y * -0.01 + up.y * 0.04) * ppm);
-      ctx.lineTo(ex + (fwd.x * 0.07 + up.x * 0.05) * ppm, ey + (fwd.y * 0.07 + up.y * 0.05) * ppm);
-      ctx.stroke();
-      const wob = Math.sin(t * 22) * 0.006;
-      ctx.beginPath();
-      ctx.moveTo(ex + (fwd.x * 0.0 + up.x * -0.045) * ppm, ey + (fwd.y * 0.0 + up.y * -0.045) * ppm);
-      ctx.lineTo(ex + (fwd.x * 0.03 + up.x * (-0.055 + wob)) * ppm, ey + (fwd.y * 0.03 + up.y * (-0.055 + wob)) * ppm);
-      ctx.lineTo(ex + (fwd.x * 0.06 + up.x * -0.045) * ppm, ey + (fwd.y * 0.06 + up.y * -0.045) * ppm);
-      ctx.stroke();
-    } else if (d.state === 'swimming' || d.state === 'surfacing') {
-      ctx.beginPath();
-      ctx.moveTo(ex + (fwd.x * 0.0 + up.x * -0.045) * ppm, ey + (fwd.y * 0.0 + up.y * -0.045) * ppm);
-      ctx.quadraticCurveTo(ex + (fwd.x * 0.03 + up.x * -0.075) * ppm, ey + (fwd.y * 0.03 + up.y * -0.075) * ppm, ex + (fwd.x * 0.065 + up.x * -0.04) * ppm, ey + (fwd.y * 0.065 + up.y * -0.04) * ppm);
-      ctx.stroke();
-    } else {
-      ctx.beginPath();
-      ctx.moveTo(ex + (fwd.x * 0.005 + up.x * -0.045) * ppm, ey + (fwd.y * 0.005 + up.y * -0.045) * ppm);
-      ctx.lineTo(ex + (fwd.x * 0.055 + up.x * -0.045) * ppm, ey + (fwd.y * 0.055 + up.y * -0.045) * ppm);
-      ctx.stroke();
-    }
-    // Hair in front.
-    this.drawHair(ctx, d, 'front');
-    // Sweat drop when nervous at the edge.
-    if (nervous && d.state !== 'crouch') {
-      const dropT = (t * 1.5 + d.idleSeed) % 1;
+      const [hx, hy] = S(pts.headC);
+      const hr = BONES.headR * ppm;
+      const dropT = (this.time * 1.5 + d.idleSeed) % 1;
       ctx.fillStyle = '#4fb0ea';
       ctx.beginPath();
-      ctx.arc(hx - fwd.x * hr * 1.15, hy - hr * 0.3 + dropT * hr * 0.9, Math.max(1.5, ppm * 0.025), 0, TAU);
+      ctx.arc(hx - pts.facing * hr * 1.25, hy - hr * 0.2 + dropT * hr * 0.9, Math.max(1.5, ppm * 0.024), 0, TAU);
       ctx.fill();
     }
     ctx.restore();
 
     // Name tag above standing divers.
-    const idle = ['idle', 'ready', 'hesitate', 'crouch'].includes(d.state);
-    if (idle) {
+    if (['idle', 'ready', 'hesitate', 'charging'].includes(d.state)) {
       const [tx, ty] = S(pts.headC);
       ctx.save();
       ctx.font = `600 ${Math.round(ppm * 0.28)}px system-ui, sans-serif`;
@@ -455,69 +418,45 @@ export class Renderer {
       ctx.textBaseline = 'bottom';
       const label = d.isPlayer ? 'YOU' : d.name;
       const tw = ctx.measureText(label).width + ppm * 0.3;
+      const top = ty - ppm * 1.15;
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.beginPath();
-      ctx.roundRect(tx - tw / 2, ty - ppm * 0.75, tw, ppm * 0.4, 6);
+      ctx.roundRect(tx - tw / 2, top, tw, ppm * 0.4, 6);
       ctx.fill();
       ctx.fillStyle = d.isPlayer ? '#d23c3c' : '#2a3350';
-      ctx.fillText(label, tx, ty - ppm * 0.4);
+      ctx.fillText(label, tx, top + ppm * 0.35);
       ctx.restore();
     }
     void world;
   }
 
-  rigToWorld(d, p) {
-    const bodyAngle = (d.angle * Math.PI) / 180;
-    const sx = d.rig.points.facing;
-    const x = p.x * sx;
-    const y = p.y;
-    return { x: d.x + x * Math.cos(bodyAngle) - y * Math.sin(bodyAngle), y: d.y + x * Math.sin(bodyAngle) + y * Math.cos(bodyAngle) };
-  }
-
-  drawHair(ctx, d, layer) {
-    const rig = d.rig;
-    const ppm = this.camera.ppm;
+  /** One continuous outline around the head, filled white so it reads as a solid hairdo. */
+  drawHair(ctx, d, lw) {
+    const hair = d.rig.hair;
+    const nodes = hair.nodes;
+    if (!nodes || nodes.length < 2) return;
+    const P = nodes.map((n) => this.toScreen(n.x, n.y));
     ctx.save();
-    if (layer === 'front' && rig.style.scalp) {
-      // Hair hugging the crown: an arc on the head's rim from the front span to the back span.
-      const h = rig.points.headC;
-      const [hx, hy] = this.toScreen(h.x, h.y);
-      const up = rig.points.headUp;
-      const upAng = Math.atan2(up.y, up.x);
-      const [front, back] = rig.style.scalp;
-      const dir = rig.points.facing; // canvas angles grow clockwise; the face is at upAng + dir·90°
-      const a0 = upAng + ((front * Math.PI) / 180) * dir;
-      const a1 = upAng - ((back * Math.PI) / 180) * dir;
-      ctx.strokeStyle = rig.hairColor;
-      ctx.lineWidth = Math.max(2, ppm * 0.045);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.arc(hx, hy, BONES.headR * ppm * 0.98, Math.min(a0, a1), Math.max(a0, a1));
-      ctx.stroke();
-    }
-    if (!rig.strands.length) {
-      ctx.restore();
-      return;
-    }
-    ctx.strokeStyle = rig.hairColor;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    const baseW = rig.style.width * ppm;
-    for (const st of rig.strands) {
-      // Strands rooted toward the back of the head go behind it.
-      const behind = st.rootAngle > 0.9;
-      if ((layer === 'back') !== behind) continue;
-      const pts = st.pts;
-      for (let i = 1; i < pts.length; i++) {
-        ctx.lineWidth = Math.max(1.5, baseW * (1 - (i - 1) / pts.length * 0.6));
-        const [x0, y0] = this.toScreen(pts[i - 1].x, pts[i - 1].y);
-        const [x1, y1] = this.toScreen(pts[i].x, pts[i].y);
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(x1, y1);
-        ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(P[0][0], P[0][1]);
+    if (hair.style.smooth) {
+      for (let i = 1; i < P.length - 1; i++) {
+        const mx = (P[i][0] + P[i + 1][0]) / 2;
+        const my = (P[i][1] + P[i + 1][1]) / 2;
+        ctx.quadraticCurveTo(P[i][0], P[i][1], mx, my);
       }
+      ctx.lineTo(P[P.length - 1][0], P[P.length - 1][1]);
+    } else {
+      for (let i = 1; i < P.length; i++) ctx.lineTo(P[i][0], P[i][1]);
     }
+    // Fill the enclosed area (closing through the head, which is drawn over it).
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.strokeStyle = '#1b1d2a';
+    ctx.lineWidth = lw * 0.6;
+    ctx.stroke();
     ctx.restore();
   }
 

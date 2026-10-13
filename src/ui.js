@@ -49,6 +49,8 @@ export class UI {
       helpBtn: $('#help-btn'),
       toasts: $('#toasts'),
       lockMeter: $('#lock-meter'),
+      chargeMeter: $('#charge-meter'),
+      chargeFill: $('#charge-meter .fill'),
       lockFill: $('#lock-meter .fill'),
       roundId: $('#round-id'),
       topup: $('#topup-btn'),
@@ -185,6 +187,17 @@ export class UI {
     }
     m.classList.remove('hidden');
     this.el.lockFill.style.height = `${Math.round(fraction * 100)}%`;
+  }
+
+  setChargeMeter(fraction) {
+    const m = this.el.chargeMeter;
+    if (fraction == null) {
+      m.classList.add('hidden');
+      return;
+    }
+    m.classList.remove('hidden');
+    this.el.chargeFill.style.width = `${Math.round(fraction * 100)}%`;
+    m.classList.toggle('full', fraction >= 0.99);
   }
 
   feed(text, cls = '') {

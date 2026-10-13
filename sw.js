@@ -1,5 +1,5 @@
 // Service worker: precache the app shell so the game works offline.
-const CACHE = 'cliffdiving-v1';
+const CACHE = 'cliffdiving-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -31,20 +31,19 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Network first (the game is under active development), cache as the offline fallback.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  const sameOrigin = new URL(event.request.url).origin === location.origin;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      const network = fetch(event.request)
-        .then((res) => {
-          if (res && res.ok && new URL(event.request.url).origin === location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(event.request, copy));
-          }
-          return res;
-        })
-        .catch(() => cached);
-      return cached || network;
-    }),
+    fetch(event.request)
+      .then((res) => {
+        if (res && res.ok && sameOrigin) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(event.request, copy));
+        }
+        return res;
+      })
+      .catch(() => caches.match(event.request)),
   );
 });

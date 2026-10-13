@@ -20,14 +20,40 @@ Any static file server works too; the service worker needs `http(s)://`, not `fi
 
 | Action | Desktop | Mobile |
 | --- | --- | --- |
-| Dive | Click (or Space) | Tap |
-| Trick | Move the mouse / trackpad quickly (no click) | Swipe |
+| Charge and jump | Hold click or Space (up to 1 s), release | Hold the screen, release |
+| Trick | Flick the mouse / trackpad (no click) | Swipe |
+| Tucked variant | Hold Shift while flicking | Keep a second finger on the screen |
 | Lock entry | Click / Space just before the water | Tap |
 
-Gestures: ↓ Front Tuck · ↑ Gainer · ↔ Corkscrew · ↘ Sideflip · ✓ (down then up) Jackknife ·
-↳ (down then sideways) Barani. Arrow keys / J / B / S also trigger tricks.
+A quick tap is the minimum hop. A full one-second charge launches the diver about
+2.5 m higher and adds close to a second of air time for tricks.
+
+| Gesture | Trick | Difficulty |
+| --- | --- | --- |
+| ↓ | Front Flip (straight) | 1.2 |
+| Shift + ↓ | Front Tuck | 1.0 |
+| ↑ | Backflip (layout) | 1.4 |
+| Shift + ↑ | Back Tuck | 1.2 |
+| ↑ then ↓ in one stroke | Gainer (legs trail behind) | 1.6 |
+| ← or → | Corkscrew (full twist) | 1.3 |
+| ↘ or ↙ | Sideflip (tucked) | 1.3 |
+| ↓ then ↑ (a ✓) | Jackknife | 0.8 |
+| ↓ then sideways (an L) | Barani (front flip + half twist) | 1.7 |
+
+Two-part gestures can be one continuous stroke or two quick strokes; a stroke that could be the
+first half of a compound waits 170 ms for its second half. Keyboard: arrow keys (with Shift for
+tucks), G gainer, J jackknife, B barani, S sideflip.
 
 The tutorial shows automatically on first launch and can be reopened with the `?` button.
+
+## The diver
+
+Stick figures are a procedural rig (`src/rig.js`): jointed spine, neck, shoulders, elbows, hips,
+knees and ankles driven by spring-damper joints toward pose targets, with limb lag, airflow and
+water drag. Limbs carry small sideways offsets, so the figure can be rotated in 3D (twist for
+corkscrews, roll for sideflips, pitch for flips) and drawn depth-sorted without ever flattening
+into a cut-out. Each hairstyle is one outline around the head whose points are spring nodes, so it
+streams, whips and floats. The player always wears the same hairstyle; bots change theirs each round.
 
 ## How a round works
 

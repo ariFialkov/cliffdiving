@@ -6,7 +6,7 @@ import { mulberry32, secureSeed, seedToId } from './rng.js';
 import { TRICKS, sequenceDifficulty } from './tricks.js';
 import { entryQuality, judgeDive, synthesizeBotDive, LOCK_WINDOW, LOCK_SWEET } from './scoring.js';
 import { Diver, World, makeBotPlan } from './world.js';
-import { HAIR_STYLES, HAIR_COLORS } from './rig.js';
+import { HAIR_STYLES, PLAYER_HAIR } from './rig.js';
 
 const BOT_POOL = [
   { name: 'Marco', color: '#2f80ed' },
@@ -72,6 +72,8 @@ export class Game {
     });
     this.input.handlers.onTap = () => this.onTap();
     this.input.handlers.onSwipe = (r) => this.onSwipe(r);
+    this.input.handlers.onPressStart = (src) => this.onPressStart(src);
+    this.input.handlers.onPressEnd = (src) => this.onPressEnd(src);
   }
 
   // ---- persistence ----------------------------------------------------------
@@ -175,13 +177,13 @@ export class Game {
     w.setCompetition(this.comp);
     w.divers = [];
     w.splashes = [];
-    const player = new Diver({ id: 'player', name: 'You', color: PLAYER_COLOR, isPlayer: true, x: EDGE_X, hairStyle: 'spiky', hairColor: '#2b1d12' });
+    const player = new Diver({ id: 'player', name: 'You', color: PLAYER_COLOR, isPlayer: true, x: EDGE_X, hairStyle: PLAYER_HAIR });
     player.setState('ready');
     w.divers.push(player);
     // Preview bots (replaced with the round's bots when a round starts).
-    const picks = this.round?.bots?.map((b) => ({ name: b.name, color: b.color })) ?? this.pickBots(Math.random);
+    const picks = this.round?.bots ?? this.pickBots(Math.random);
     picks.forEach((b, i) => {
-      const d = new Diver({ id: `bot${i}`, name: b.name, color: b.color, x: QUEUE_X[i], hairStyle: b.hairStyle, hairColor: b.hairColor, idleStyle: b.idleStyle });
+      const d = new Diver({ id: `bot${i}`, name: b.name, color: b.color, x: QUEUE_X[i], hairStyle: b.hairStyle, idleStyle: b.idleStyle });
       d.setState('idle');
       w.divers.push(d);
     });
@@ -208,7 +210,7 @@ export class Game {
 
   pickBots(rand) {
     const pool = [...BOT_POOL];
-    const styles = Object.keys(HAIR_STYLES).filter((k) => k !== 'bald');
+    const styles = Object.keys(HAIR_STYLES).filter((k) => k !== 'bald' && k !== PLAYER_HAIR);
     const idles = ['stand', 'hipsHands', 'crossed', 'stretch'];
     const out = [];
     for (let i = 0; i < 3; i++) {
@@ -216,7 +218,6 @@ export class Game {
       const b = { ...pool.splice(idx, 1)[0] };
       // Bots change their look every round; the player's never changes.
       b.hairStyle = rand() < 0.08 ? 'bald' : styles[Math.floor(rand() * styles.length)];
-      b.hairColor = HAIR_COLORS[Math.floor(rand() * HAIR_COLORS.length)];
       b.idleStyle = idles[Math.floor(rand() * idles.length)];
       out.push(b);
     }
@@ -262,49 +263,70 @@ export class Game {
     this.state = 'ready';
     this.input.swipeEnabled = false;
     this.clockLeft = DIVE_CLOCK;
-    this.ui.setPrompt('Tap to dive', 'pulse');
+    this.ui.setPrompt('Hold to charge · release to dive', 'pulse');
+    this.ui.setChargeMeter(null);
+    this.input.resetGestures();
     this.ui.setClock(1, DIVE_CLOCK);
     this.ui.renderLeaderboard(this.round.entries);
     this.ui.clearFeed();
     this.frameTop();
   }
 
-  onTap() {
+  // ---- player input ---------------------------------------------------------
+  onPressStart(src) {
     if (this.state === 'ready') {
-      this.playerJump();
-    } else if (this.state === 'playerAir') {
-      if (this.player.airT < 0.25) return;
-      if (this.player.lock()) {
-        const d = this.player.lockDelta;
-        if (this.player.lockedEarly) this.ui.feed('Locked too early', 'warn');
-        else {
-          const err = Math.abs(d - LOCK_SWEET);
-          const label = err < 0.07 ? 'Perfect lock!' : err < 0.16 ? 'Good lock' : d > LOCK_SWEET ? 'Early lock' : 'Late lock';
-          this.ui.feed(label, err < 0.07 ? 'great' : err < 0.16 ? 'good' : 'warn');
-        }
-        this.input.swipeEnabled = false;
-        this.ui.setLockMeter(null);
+      if (this.player.startCharge()) {
+        this.state = 'charging';
+        this.ui.setPrompt('Release to jump!', 'soft');
+        this.ui.setChargeMeter(0);
       }
+    } else if (this.state === 'playerAir' && src === 'key') {
+      this.tryLock();
     }
+  }
+
+  onPressEnd() {
+    if (this.state === 'charging') this.releaseJump();
+  }
+
+  onTap() {
+    if (this.state === 'playerAir') this.tryLock();
+  }
+
+  tryLock() {
+    if (this.player.state !== 'airborne' || this.player.airT < 0.25) return;
+    if (!this.player.lock()) return;
+    const d = this.player.lockDelta;
+    if (this.player.lockedEarly) this.ui.feed('Locked too early', 'warn');
+    else {
+      const err = Math.abs(d - LOCK_SWEET);
+      const label = err < 0.07 ? 'Perfect lock!' : err < 0.16 ? 'Good lock' : d > LOCK_SWEET ? 'Early lock' : 'Late lock';
+      this.ui.feed(label, err < 0.07 ? 'great' : err < 0.16 ? 'good' : 'warn');
+    }
+    this.input.swipeEnabled = false;
+    this.ui.setLockMeter(null);
   }
 
   onSwipe(r) {
     if (this.state !== 'playerAir' || !r?.trick) return;
     const trick = TRICKS[r.trick];
-    const timeLeft = this.player.impactT - this.player.airT;
-    const queuedDur = this.player.current ? this.player.current.trick.duration - this.player.current.t : 0;
-    const ok = this.player.queueTrick(trick.id);
-    if (!ok) return;
+    const p = this.player;
+    const timeLeft = p.state === 'airborne' ? p.impactT - p.airT : this.world.airTimeFor(p.jumpCharge);
+    const queuedDur = p.current ? p.current.trick.duration - p.current.t : 0;
+    if (!p.queueTrick(trick.id)) return;
     const fits = timeLeft - queuedDur >= trick.duration + 0.05;
     this.ui.feed(`${trick.name}  +${trick.difficulty.toFixed(1)}${fits ? '' : '  (too late!)'}`, fits ? 'trick' : 'warn');
   }
 
-  playerJump() {
+  releaseJump() {
+    this.player.release();
     this.state = 'playerAir';
     this.ui.setPrompt(null);
     this.ui.setClock(null);
-    this.player.jump();
+    this.ui.setChargeMeter(null);
     this.input.swipeEnabled = true;
+    const c = this.player.charge;
+    if (c >= 0.97) this.ui.feed('Full power!', 'great');
     this.ui.feed('Swipe to trick · tap to lock entry', 'hint');
   }
 
@@ -369,9 +391,12 @@ export class Game {
     const scores = placeBotScores(playerScore, r.position, r.rand);
     r.botScores = scores;
     this.bots.forEach((bot, i) => {
-      const dive = synthesizeBotDive({ targetTotal: scores[i], airTime: this.world.airTime, rand: r.rand });
+      // Each bot commits to its own jump power, which sets how much air time it has.
+      bot.jumpChargeTarget = Math.min(1, 0.15 + r.rand() * r.rand() * 1.1 + r.rand() * 0.25);
+      const airTime = this.world.airTimeFor(bot.jumpChargeTarget);
+      const dive = synthesizeBotDive({ targetTotal: scores[i], airTime, rand: r.rand });
       bot.botDive = dive;
-      bot.plan = makeBotPlan({ trickIds: dive.trickIds, q: dive.q, rand: r.rand, airTime: this.world.airTime });
+      bot.plan = makeBotPlan({ trickIds: dive.trickIds, q: dive.q, rand: r.rand, airTime });
       bot.hesitation = r.rand.range(0.7, 2.2);
       bot.balk = r.rand.chance(0.22);
     });
@@ -411,7 +436,7 @@ export class Game {
     }
     bot.setState('hesitate');
     const go = () => {
-      bot.jump();
+      bot.startCharge(bot.jumpChargeTarget);
       this.ui.setPrompt(null);
     };
     if (bot.balk) {
@@ -463,12 +488,17 @@ export class Game {
   update(dt) {
     const w = this.world;
     const cam = this.renderer.camera;
-    if (this.state === 'ready') {
+    if (this.state === 'ready' || this.state === 'charging') {
       this.clockLeft -= dt;
       this.ui.setClock(clamp(this.clockLeft / DIVE_CLOCK, 0, 1), Math.max(0, this.clockLeft));
+      if (this.state === 'charging') this.ui.setChargeMeter(this.player.charge);
       if (this.clockLeft <= 0) {
         this.ui.feed('Time! Off you go…', 'warn');
-        this.playerJump();
+        if (this.state === 'ready') {
+          this.player.startCharge(0);
+          this.state = 'charging';
+        }
+        this.releaseJump();
       }
     }
     // Camera follows whoever is in the air.

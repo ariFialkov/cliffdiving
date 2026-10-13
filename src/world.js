@@ -5,23 +5,37 @@ import { TRICKS } from './tricks.js';
 import { LOCK_WINDOW, LOCK_SWEET, LOCK_TOLERANCE } from './scoring.js';
 import { Rig, STANDING_HIP_HEIGHT } from './rig.js';
 
-export const HIP_HEIGHT = STANDING_HIP_HEIGHT; // hip above feet when standing
+export const HIP_HEIGHT = STANDING_HIP_HEIGHT; // hip above the cliff top when standing
 export const IMPACT_OFFSET = 0.45; // hip is this far above the surface at impact
-export const JUMP_VY = -1.6; // initial vertical speed (negative = up)
-export const JUMP_VX = 1.7; // initial horizontal speed
-const CROUCH_TIME = 0.17;
+export const JUMP_VY = -1.6; // minimum take-off speed (a quick tap); negative = up
+export const JUMP_VY_BONUS = 3.6; // extra upward speed at full charge
+export const JUMP_VX = 1.7;
+export const JUMP_VX_BONUS = 0.9;
+export const CHARGE_TIME = 1.0; // seconds of holding for full power
+const MIN_CROUCH = 0.12; // a tap still dips before leaving the ground
 const LAUNCH_TIME = 0.1;
+const SURFACE_TIME = 0.8;
+const GROUNDED = new Set(['idle', 'ready', 'hesitate', 'walking', 'charging', 'launch']);
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const lerp = (a, b, t) => a + (b - a) * t;
 
 function nearestVertical(angle) {
-  // Nearest multiple of 180° (feet-first or head-first entries are both clean).
-  return Math.round(angle / 180) * 180;
+  return Math.round(angle / 180) * 180; // feet-first and head-first are both clean
 }
 
 export function angleError(angle) {
   return Math.abs(angle - nearestVertical(angle));
+}
+
+/** Degrees between the body's long axis and vertical, for a given pitch and roll. */
+export function entryTilt(pitchDeg, rollRev) {
+  const c = Math.abs(Math.cos((pitchDeg * Math.PI) / 180) * Math.cos(rollRev * 2 * Math.PI));
+  return (Math.acos(clamp(c, 0, 1)) * 180) / Math.PI;
+}
+
+export function jumpVelocity(charge) {
+  return { vx: JUMP_VX + JUMP_VX_BONUS * charge, vy: JUMP_VY - JUMP_VY_BONUS * charge };
 }
 
 /** Rotation progress profile: slow in, fast through the middle, slow out. */
@@ -29,8 +43,14 @@ function spinProfile(p, peak) {
   return p - (Math.sin(2 * Math.PI * p) / (2 * Math.PI)) * peak;
 }
 
+/** Move `value` toward the nearest multiple of `step` by at most `rate`. */
+function settleTo(value, step, rate) {
+  const tgt = Math.round(value / step) * step;
+  return value + clamp(tgt - value, -rate, rate);
+}
+
 export class Diver {
-  constructor({ id, name, color, isPlayer = false, x = 0, hairStyle = 'spiky', hairColor = '#2b1d12', idleStyle = 'stand' }) {
+  constructor({ id, name, color, isPlayer = false, x = 0, hairStyle = 'spiky', idleStyle = 'stand' }) {
     this.id = id;
     this.name = name;
     this.color = color;
@@ -42,10 +62,15 @@ export class Diver {
     this.state = 'idle';
     this.stateT = 0;
     this.idleSeed = Math.random() * 1000;
-    this.rig = new Rig({ hairStyle, hairColor, idleStyle });
-    // pose
+    this.rig = new Rig({ hairStyle, idleStyle });
+    // orientation: pitch (deg, flips), twist (revs about the long axis), roll (revs, sideflips)
     this.angle = 0;
     this.twist = 0;
+    this.roll = 0;
+    // jump
+    this.charge = 0;
+    this.autoRelease = null;
+    this.jumpCharge = 0;
     // trick execution
     this.queue = [];
     this.current = null;
@@ -58,13 +83,12 @@ export class Diver {
     this.lockedEarly = false;
     this.lockAngleTarget = 0;
     this.entryAngleErr = 0;
-    this.entryTwistErr = 0;
     this.result = null;
     this.plan = null; // bots only
     this.walkTarget = null;
     this.onEvent = null;
     this.sinkDepth = 0;
-    this.pendingJump = false;
+    this.swimPitch = 90;
   }
 
   setState(s) {
@@ -78,44 +102,60 @@ export class Diver {
 
   // ---- control -----------------------------------------------------------
 
-  /** Begin the jump: crouch, extend, then leave the edge. */
-  jump() {
+  /** Start crouching to charge the jump. `autoRelease` (0..1) makes it let go by itself (bots, timeouts). */
+  startCharge(autoRelease = null) {
     if (!['ready', 'idle', 'hesitate'].includes(this.state)) return false;
-    this.setState('crouch');
-    this.pendingJump = true;
+    this.setState('charging');
+    this.charge = 0;
+    this.autoRelease = autoRelease;
+    return true;
+  }
+
+  release() {
+    if (this.state !== 'charging') return false;
+    if (this.stateT < MIN_CROUCH) {
+      this.autoRelease = 0; // let the dip finish, then go
+      return true;
+    }
+    this.jumpCharge = this.charge;
+    this.setState('launch');
+    this.emit('release', { charge: this.jumpCharge });
     return true;
   }
 
   takeOff(env) {
+    const v = jumpVelocity(this.jumpCharge);
     this.setState('airborne');
-    this.vx = JUMP_VX;
-    this.vy = JUMP_VY;
+    this.vx = v.vx;
+    this.vy = v.vy;
     this.airT = 0;
     this.angle = 0;
     this.twist = 0;
-    this.pendingJump = false;
-    // Analytical time of impact (hip reaches surface - IMPACT_OFFSET).
+    this.roll = 0;
     const drop = env.height - IMPACT_OFFSET - this.y;
     const g = env.gravity;
     this.impactT = (-this.vy + Math.sqrt(this.vy * this.vy + 2 * g * drop)) / g;
     this.emit('jump');
+    if (this.queue.length) this.startTrick(this.queue.shift());
   }
 
   queueTrick(trickId) {
-    if (this.state !== 'airborne' || this.locked) return false;
-    if (!this.current) {
-      this.startTrick(trickId);
-    } else if (this.queue.length < 1) {
+    if (this.locked) return false;
+    if (this.state === 'launch') {
+      if (this.queue.length) return false;
       this.queue.push(trickId);
-    } else {
-      return false;
+      return true;
     }
+    if (this.state !== 'airborne') return false;
+    if (!this.current) this.startTrick(trickId);
+    else if (this.queue.length < 1) this.queue.push(trickId);
+    else return false;
     return true;
   }
 
   startTrick(trickId) {
     const trick = TRICKS[trickId];
-    this.current = { trick, t: 0, startAngle: this.angle, startTwist: this.twist };
+    this.current = { trick, t: 0, startAngle: this.angle, startTwist: this.twist, startRoll: this.roll };
     this.emit('trickStart', { trick, timeLeft: this.impactT - this.airT });
   }
 
@@ -125,7 +165,6 @@ export class Diver {
     this.locked = true;
     this.queue = [];
     if (this.current) {
-      // Abort the trick; the body will ease toward vertical.
       this.aborted = this.current.trick;
       this.current = null;
     }
@@ -144,19 +183,20 @@ export class Diver {
 
   update(dt, env, rand, time) {
     this.stateT += dt;
+    if (GROUNDED.has(this.state)) this.y = -HIP_HEIGHT + this.rig.groundDrop;
     switch (this.state) {
       case 'idle':
       case 'ready':
       case 'hesitate':
-        this.updateIdle(dt);
+        this.settleUpright(dt);
         break;
-      case 'crouch':
-        this.updateIdle(dt);
-        if (this.stateT >= CROUCH_TIME) this.setState('launch');
+      case 'charging':
+        this.settleUpright(dt);
+        this.charge = clamp(this.stateT / CHARGE_TIME, 0, 1);
+        if (this.autoRelease != null && this.stateT >= MIN_CROUCH && this.charge >= this.autoRelease) this.release();
         break;
       case 'launch':
-        this.y = -HIP_HEIGHT + 0.06 * (1 - this.stateT / LAUNCH_TIME); // rising out of the crouch
-        this.x += 0.6 * dt;
+        this.x += (0.4 + this.jumpCharge * 0.6) * dt;
         if (this.stateT >= LAUNCH_TIME) this.takeOff(env);
         break;
       case 'walking':
@@ -166,25 +206,15 @@ export class Diver {
         this.updateAirborne(dt, env);
         break;
       case 'entering':
-        this.updateEntering(dt, env);
+        this.updateEntering(dt);
         break;
-      case 'surfacing': {
-        const k = clamp(this.stateT / 0.6, 0, 1);
-        const ease = 1 - (1 - k) * (1 - k);
-        this.y = lerp(this.sinkDepth, env.height + 0.12, ease);
-        this.x += 0.5 * dt;
-        this.angle = lerp(this.angle, 0, Math.min(1, dt * 6));
-        this.vy = 0;
-        if (this.stateT >= 0.6) {
-          this.setState('swimming');
-          this.emit('surfaced');
-        }
+      case 'surfacing':
+        this.updateSurfacing(dt, env);
         break;
-      }
       case 'swimming':
-        this.x += 1.7 * dt;
-        this.y = env.height + 0.12 + Math.sin(this.stateT * 5) * 0.03;
-        this.angle = Math.sin(this.stateT * 5) * 2;
+        this.x += 1.5 * dt;
+        this.y = env.height + 0.1 + Math.sin(this.stateT * 5.2) * 0.025;
+        this.angle = this.swimPitch + Math.sin(this.stateT * 5.2) * 3;
         if (this.stateT > 4) this.setState('gone');
         break;
       default:
@@ -194,12 +224,10 @@ export class Diver {
     void rand;
   }
 
-  updateIdle(dt) {
-    // Standing on the cliff top; the rig handles the nervous animation.
-    const crouchDrop = this.state === 'crouch' ? 0.1 * clamp(this.stateT / CROUCH_TIME, 0, 1) : 0;
-    this.y = -HIP_HEIGHT + crouchDrop;
+  settleUpright(dt) {
     this.angle = lerp(this.angle, 0, Math.min(1, dt * 10));
     this.twist = 0;
+    this.roll = 0;
   }
 
   updateWalking(dt) {
@@ -214,7 +242,6 @@ export class Diver {
     } else {
       this.x += dir * step;
     }
-    this.y = -HIP_HEIGHT + Math.abs(Math.sin(this.stateT * 8.5)) * 0.02;
   }
 
   updateAirborne(dt, env) {
@@ -224,49 +251,41 @@ export class Diver {
     this.x += this.vx * dt;
     this.vx *= 1 - 0.08 * dt;
 
-    // Bot autopilot: feed tricks and lock from the plan.
     if (this.plan) this.updateBotAutopilot();
 
-    // Tricks
     if (this.current) {
       const c = this.current;
+      const tr = c.trick;
       c.t += dt;
-      const p = clamp(c.t / c.trick.duration, 0, 1);
+      const p = clamp(c.t / tr.duration, 0, 1);
       // Tucked shapes spin faster through the middle (angular momentum).
-      const peak = c.trick.shape === 'tuck' || c.trick.shape === 'side' ? 0.75 : c.trick.shape === 'layout' ? 0.45 : 0.55;
+      const peak = tr.shape === 'tuck' ? 0.75 : tr.shape === 'layout' || tr.shape === 'straight' || tr.shape === 'gainer' ? 0.45 : 0.55;
       const s = spinProfile(p, peak);
-      this.angle = c.startAngle + c.trick.flip * 360 * s;
-      this.twist = c.startTwist + c.trick.twist * spinProfile(p, 0.5);
+      this.angle = c.startAngle + tr.flip * 360 * s;
+      this.twist = c.startTwist + tr.twist * spinProfile(p, 0.35);
+      this.roll = c.startRoll + tr.roll * s;
       if (p >= 1) {
-        this.completed.push(c.trick.id);
+        this.completed.push(tr.id);
         this.current = null;
-        this.emit('trickDone', { trick: c.trick });
+        this.emit('trickDone', { trick: tr });
         if (this.queue.length > 0) this.startTrick(this.queue.shift());
       }
     } else if (this.locked) {
-      // Ease into the entry line.
-      const rate = 260 * dt;
+      // Ease into a streamlined entry line.
       const d = this.lockAngleTarget - this.angle;
-      this.angle += clamp(d, -rate, rate);
-      // Finish any partial twist.
-      const tw = Math.round(this.twist * 2) / 2;
-      this.twist += clamp(tw - this.twist, -2 * dt, 2 * dt);
+      this.angle += clamp(d, -260 * dt, 260 * dt);
+      this.twist = settleTo(this.twist, 0.5, 2 * dt);
+      this.roll = settleTo(this.roll, 0.5, 2 * dt);
     } else {
-      // Free-fall without input: the body drifts slightly.
-      this.angle += (this.plan ? 0 : 6) * dt;
+      this.angle += (this.plan ? 0 : 6) * dt; // untended bodies drift
     }
 
-    if (this.airT >= this.impactT) {
-      this.enterWater(env);
-    }
+    if (this.airT >= this.impactT) this.enterWater(env);
   }
 
   enterWater(env) {
-    // Any whole or half twist leaves the body vertical; penalise partial twists.
-    const twistFrac = ((this.twist % 0.5) + 0.5) % 0.5;
-    this.entryTwistErr = Math.min(twistFrac, 0.5 - twistFrac) * 4 * 45; // degrees-equivalent
     const stillTricking = this.current != null;
-    this.entryAngleErr = angleError(this.angle) + this.entryTwistErr + (stillTricking ? 10 : 0);
+    this.entryAngleErr = entryTilt(this.angle, this.roll) + (stillTricking ? 10 : 0);
     this.setState('entering');
     this.y = env.height - IMPACT_OFFSET;
     this.emit('impact', {
@@ -278,23 +297,56 @@ export class Diver {
       midTrick: stillTricking,
       vy: this.vy,
     });
+    this.current = null;
   }
 
-  updateEntering(dt, env) {
+  /** Re-express a half roll as a half pitch + half twist (same pose) so the swim exit stays simple. */
+  normalizeRoll() {
+    const halves = Math.round(this.roll * 2);
+    this.roll -= halves / 2;
+    if (((halves % 2) + 2) % 2 === 1) {
+      this.angle += 180;
+      this.twist += 0.5;
+      this.rig.shiftPitch(Math.PI);
+    }
+  }
+
+  updateEntering(dt) {
     // Water drag: a clean entry slices deep, a flop stops short.
     const clean = clamp(1 - this.entryAngleErr / 60, 0, 1);
-    const drag = 2.2 + (1 - clean) * 6;
-    this.vy *= Math.exp(-drag * dt);
+    this.vy *= Math.exp(-(2.2 + (1 - clean) * 6) * dt);
     this.y += this.vy * dt;
     this.x += (0.2 + this.vx * 0.1) * dt;
     this.vx *= Math.exp(-3 * dt);
-    // Tumble to a float: the body relaxes toward horizontal-ish face-down.
     const target = nearestVertical(this.angle) + (this.entryAngleErr > 25 ? 60 : 20);
     this.angle = lerp(this.angle, target, Math.min(1, dt * 1.5));
-    this.twist = lerp(this.twist, Math.round(this.twist * 2) / 2, Math.min(1, dt * 4));
+    this.roll = settleTo(this.roll, 0.5, 1.5 * dt);
+    this.twist = settleTo(this.twist, 0.5, 1.5 * dt);
     if (this.stateT > 0.9) {
+      this.normalizeRoll();
       this.sinkDepth = this.y;
+      // Swim pose has the head leading along +x: pitch 90° (nearest equivalent turn).
+      this.swimPitch = 90 + 360 * Math.round((this.angle - 90) / 360);
+      this.swimTwist = Math.ceil(this.twist - 1e-6); // roll over to face down
       this.setState('surfacing');
+    }
+  }
+
+  updateSurfacing(dt, env) {
+    const k = clamp(this.stateT / SURFACE_TIME, 0, 1);
+    const ease = 1 - (1 - k) * (1 - k);
+    this.y = lerp(this.sinkDepth, env.height + 0.1, ease);
+    this.x += 0.6 * dt;
+    this.vy = 0;
+    this.angle = lerp(this.angle, this.swimPitch, Math.min(1, dt * 4));
+    this.twist = lerp(this.twist, this.swimTwist, Math.min(1, dt * 4));
+    this.roll = lerp(this.roll, 0, Math.min(1, dt * 4));
+    if (this.stateT >= SURFACE_TIME) {
+      this.angle = this.swimPitch;
+      this.twist = this.swimTwist;
+      this.roll = 0;
+      this.setState('swimming');
+      this.emit('surfaced');
     }
   }
 
@@ -310,10 +362,7 @@ export class Diver {
       this.startTrick(plan.trickIds[plan.nextIndex]);
       plan.nextIndex += 1;
     }
-    if (!this.locked && plan.nextIndex >= plan.trickIds.length && !this.current) {
-      if (timeLeft <= plan.lockDelta) this.lock();
-    }
-    // Mid-air "sloppy" bots: drift the angle a little.
+    if (!this.locked && plan.nextIndex >= plan.trickIds.length && !this.current && timeLeft <= plan.lockDelta) this.lock();
     if (!this.current && !this.locked) this.angle += plan.drift * 0.016;
   }
 }
@@ -404,6 +453,13 @@ export class World {
     const drop = comp.height - IMPACT_OFFSET + HIP_HEIGHT;
     this.gravity = (2 * (drop - JUMP_VY * comp.airTime)) / (comp.airTime * comp.airTime);
     this.airTime = comp.airTime;
+  }
+
+  /** Seconds in the air for a jump at the given charge (0..1). */
+  airTimeFor(charge) {
+    const { vy } = jumpVelocity(charge);
+    const drop = this.height - IMPACT_OFFSET + HIP_HEIGHT;
+    return (-vy + Math.sqrt(vy * vy + 2 * this.gravity * drop)) / this.gravity;
   }
 
   addSplash(x, power) {
