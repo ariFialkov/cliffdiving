@@ -1,0 +1,12 @@
+{
+  "name": "cliffdiving",
+  "version": "0.1.0",
+  "description": "Cliffdiving: a casual simulated-multiplayer cliff diving betting game (PWA).",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "license": "UNLICENSED"
+}

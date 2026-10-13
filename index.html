@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>Cliffdiving</title>
+  <meta name="description" content="A casual cliff-diving competition game. Tap to dive, swipe to trick, lock in a clean entry." />
+  <meta name="theme-color" content="#4fb0ea" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Cliffdiving" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene" aria-label="Cliff diving scene"></canvas>
+
+    <!-- HUD (non-interactive except where marked .ui) -->
+    <div id="hud">
+      <div class="topbar">
+        <div class="brand">🌊 <span class="word">Cliffdiving</span></div>
+        <div id="comp-pill" class="pill">Little Tykes · 10m</div>
+        <div class="balance-wrap"><span class="coin">●</span><span id="balance">1,000.00</span></div>
+      </div>
+      <ol id="leaderboard" class="leaderboard hidden"></ol>
+      <div id="trick-feed" class="feed"></div>
+      <div id="prompt" class="prompt hidden">Tap to dive</div>
+      <svg id="dive-clock" class="clock hidden" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+        <circle class="bg" cx="32" cy="32" r="26" />
+        <circle class="fg" cx="32" cy="32" r="26" transform="rotate(-90 32 32)" />
+        <text x="32" y="37" text-anchor="middle">10</text>
+      </svg>
+      <div id="lock-meter" class="lock-meter hidden" aria-hidden="true">
+        <div class="track"><div class="sweet"></div><div class="fill"></div></div>
+        <div class="label">TAP TO LOCK</div>
+      </div>
+      <button id="help-btn" class="ui help" aria-label="How to play">?</button>
+      <div id="toasts" class="toasts"></div>
+    </div>
+
+    <!-- Judges -->
+    <div id="judges" class="judges hidden">
+      <div id="judges-name" class="judges-name">Your dive</div>
+      <div class="marks">
+        <div class="judge"><span class="who">Anya</span><span class="mark"></span></div>
+        <div class="judge"><span class="who">Bjorn</span><span class="mark"></span></div>
+        <div class="judge"><span class="who">Chikako</span><span class="mark"></span></div>
+      </div>
+      <div class="total"><span class="lbl">Total</span><span id="judges-total"></span><span class="outof">/ 30</span></div>
+    </div>
+
+    <!-- Lobby -->
+    <section id="lobby" class="panel ui lobby" aria-label="Round setup">
+      <h2>Pick your competition</h2>
+      <div id="comp-list" class="comp-list"></div>
+      <div class="stake-row">
+        <h3>Stake</h3>
+        <div class="stake-controls">
+          <button id="stake-dec" class="round-btn" aria-label="Lower stake">−</button>
+          <div class="stake-value"><span class="coin">●</span><span id="stake-value">1.00</span></div>
+          <button id="stake-inc" class="round-btn" aria-label="Raise stake">+</button>
+        </div>
+        <div id="stake-chips" class="chips"></div>
+      </div>
+      <table id="odds-table" class="odds"></table>
+      <button id="dive-btn" class="primary">Enter for 1.00</button>
+      <button id="topup-btn" class="link hidden">Top up to 1,000 credits</button>
+      <details class="gestures">
+        <summary>Trick cheat-sheet</summary>
+        <ul id="gesture-list" class="gesture-list"></ul>
+      </details>
+    </section>
+
+    <!-- Results -->
+    <section id="results" class="panel ui results hidden" aria-label="Round results">
+      <h2 id="results-title">Results</h2>
+      <p id="results-sub" class="sub"></p>
+      <ol id="results-table" class="standings"></ol>
+      <div id="results-payout" class="payout"></div>
+      <div id="results-unlock" class="unlock hidden"></div>
+      <div class="btn-row">
+        <button id="again-btn" class="primary">Dive again</button>
+        <button id="lobby-btn" class="secondary">Change competition</button>
+      </div>
+      <p id="round-id" class="round-id"></p>
+    </section>
+
+    <!-- Tutorial -->
+    <section id="tutorial" class="modal ui hidden" aria-label="How to play">
+      <div class="modal-card">
+        <h2>How to play</h2>
+        <div class="steps">
+          <div class="step">
+            <div class="ico">
+              <svg viewBox="0 0 64 64" width="56" height="56"><circle cx="32" cy="32" r="14" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="32" cy="32" r="5" fill="currentColor"/><circle cx="32" cy="32" r="24" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="4 6"/></svg>
+            </div>
+            <div class="txt"><b>Tap</b> (or click, or press space) to leap off the cliff.</div>
+          </div>
+          <div class="step">
+            <div class="ico">
+              <svg viewBox="0 0 64 64" width="56" height="56"><path d="M20 14 C 36 22, 36 42, 22 50" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M30 44 L 22 50 L 20 40" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M40 12 L 48 12 L 48 20 M48 12 L 38 22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+            </div>
+            <div class="txt"><b>Swipe</b> in the air to do tricks. On desktop just move the mouse or trackpad fast, no clicking. Different paths = different tricks; harder tricks score more.</div>
+          </div>
+          <div class="step">
+            <div class="ico">
+              <svg viewBox="0 0 64 64" width="56" height="56"><path d="M8 48 q 8 -6 16 0 t 16 0 t 16 0" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><line x1="32" y1="10" x2="32" y2="40" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="32" cy="8" r="4" fill="currentColor"/></svg>
+            </div>
+            <div class="txt"><b>Tap again</b> just before the water to lock in a straight entry. Less splash = more points from the three judges (each out of 10).</div>
+          </div>
+        </div>
+        <ul id="tutorial-gestures" class="gesture-list compact"></ul>
+        <p class="fine">Win a round to unlock the next, higher-stakes competition. Three rivals dive after you.</p>
+        <button id="tutorial-close" class="primary">Got it</button>
+      </div>
+    </section>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
