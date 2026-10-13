@@ -6,6 +6,7 @@ import { mulberry32, secureSeed, seedToId } from './rng.js';
 import { TRICKS, sequenceDifficulty } from './tricks.js';
 import { entryQuality, judgeDive, synthesizeBotDive, LOCK_WINDOW, LOCK_SWEET } from './scoring.js';
 import { Diver, World, makeBotPlan } from './world.js';
+import { HAIR_STYLES, HAIR_COLORS } from './rig.js';
 
 const BOT_POOL = [
   { name: 'Marco', color: '#2f80ed' },
@@ -174,13 +175,13 @@ export class Game {
     w.setCompetition(this.comp);
     w.divers = [];
     w.splashes = [];
-    const player = new Diver({ id: 'player', name: 'You', color: PLAYER_COLOR, isPlayer: true, x: EDGE_X });
+    const player = new Diver({ id: 'player', name: 'You', color: PLAYER_COLOR, isPlayer: true, x: EDGE_X, hairStyle: 'spiky', hairColor: '#2b1d12' });
     player.setState('ready');
     w.divers.push(player);
     // Preview bots (replaced with the round's bots when a round starts).
     const picks = this.round?.bots?.map((b) => ({ name: b.name, color: b.color })) ?? this.pickBots(Math.random);
     picks.forEach((b, i) => {
-      const d = new Diver({ id: `bot${i}`, name: b.name, color: b.color, x: QUEUE_X[i] });
+      const d = new Diver({ id: `bot${i}`, name: b.name, color: b.color, x: QUEUE_X[i], hairStyle: b.hairStyle, hairColor: b.hairColor, idleStyle: b.idleStyle });
       d.setState('idle');
       w.divers.push(d);
     });
@@ -207,10 +208,17 @@ export class Game {
 
   pickBots(rand) {
     const pool = [...BOT_POOL];
+    const styles = Object.keys(HAIR_STYLES).filter((k) => k !== 'bald');
+    const idles = ['stand', 'hipsHands', 'crossed', 'stretch'];
     const out = [];
     for (let i = 0; i < 3; i++) {
       const idx = Math.floor(rand() * pool.length);
-      out.push(pool.splice(idx, 1)[0]);
+      const b = { ...pool.splice(idx, 1)[0] };
+      // Bots change their look every round; the player's never changes.
+      b.hairStyle = rand() < 0.08 ? 'bald' : styles[Math.floor(rand() * styles.length)];
+      b.hairColor = HAIR_COLORS[Math.floor(rand() * HAIR_COLORS.length)];
+      b.idleStyle = idles[Math.floor(rand() * idles.length)];
+      out.push(b);
     }
     return out;
   }
@@ -295,7 +303,7 @@ export class Game {
     this.state = 'playerAir';
     this.ui.setPrompt(null);
     this.ui.setClock(null);
-    this.player.jump(this.world);
+    this.player.jump();
     this.input.swipeEnabled = true;
     this.ui.feed('Swipe to trick · tap to lock entry', 'hint');
   }
@@ -403,11 +411,8 @@ export class Game {
     }
     bot.setState('hesitate');
     const go = () => {
-      bot.setState('crouch');
-      this.after(0.32, () => {
-        bot.jump(this.world);
-        this.ui.setPrompt(null);
-      });
+      bot.jump();
+      this.ui.setPrompt(null);
     };
     if (bot.balk) {
       // Step back nervously, then commit.

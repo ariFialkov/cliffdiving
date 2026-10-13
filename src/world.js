@@ -3,11 +3,14 @@
 
 import { TRICKS } from './tricks.js';
 import { LOCK_WINDOW, LOCK_SWEET, LOCK_TOLERANCE } from './scoring.js';
+import { Rig, STANDING_HIP_HEIGHT } from './rig.js';
 
-export const HIP_HEIGHT = 0.95; // hip above feet when standing
+export const HIP_HEIGHT = STANDING_HIP_HEIGHT; // hip above feet when standing
 export const IMPACT_OFFSET = 0.45; // hip is this far above the surface at impact
 export const JUMP_VY = -1.6; // initial vertical speed (negative = up)
 export const JUMP_VX = 1.7; // initial horizontal speed
+const CROUCH_TIME = 0.17;
+const LAUNCH_TIME = 0.1;
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -21,8 +24,13 @@ export function angleError(angle) {
   return Math.abs(angle - nearestVertical(angle));
 }
 
+/** Rotation progress profile: slow in, fast through the middle, slow out. */
+function spinProfile(p, peak) {
+  return p - (Math.sin(2 * Math.PI * p) / (2 * Math.PI)) * peak;
+}
+
 export class Diver {
-  constructor({ id, name, color, isPlayer = false, x = 0 }) {
+  constructor({ id, name, color, isPlayer = false, x = 0, hairStyle = 'spiky', hairColor = '#2b1d12', idleStyle = 'stand' }) {
     this.id = id;
     this.name = name;
     this.color = color;
@@ -34,13 +42,10 @@ export class Diver {
     this.state = 'idle';
     this.stateT = 0;
     this.idleSeed = Math.random() * 1000;
+    this.rig = new Rig({ hairStyle, hairColor, idleStyle });
     // pose
     this.angle = 0;
-    this.tuck = 0;
-    this.pike = 0;
     this.twist = 0;
-    this.arms = 'nervous';
-    this.lean = 0;
     // trick execution
     this.queue = [];
     this.current = null;
@@ -58,6 +63,8 @@ export class Diver {
     this.plan = null; // bots only
     this.walkTarget = null;
     this.onEvent = null;
+    this.sinkDepth = 0;
+    this.pendingJump = false;
   }
 
   setState(s) {
@@ -71,21 +78,27 @@ export class Diver {
 
   // ---- control -----------------------------------------------------------
 
-  jump(env) {
-    if (this.state !== 'ready' && this.state !== 'crouch' && this.state !== 'idle') return false;
+  /** Begin the jump: crouch, extend, then leave the edge. */
+  jump() {
+    if (!['ready', 'idle', 'hesitate'].includes(this.state)) return false;
+    this.setState('crouch');
+    this.pendingJump = true;
+    return true;
+  }
+
+  takeOff(env) {
     this.setState('airborne');
     this.vx = JUMP_VX;
     this.vy = JUMP_VY;
     this.airT = 0;
     this.angle = 0;
-    this.arms = 'out';
-    this.lean = 0;
+    this.twist = 0;
+    this.pendingJump = false;
     // Analytical time of impact (hip reaches surface - IMPACT_OFFSET).
     const drop = env.height - IMPACT_OFFSET - this.y;
     const g = env.gravity;
     this.impactT = (-this.vy + Math.sqrt(this.vy * this.vy + 2 * g * drop)) / g;
     this.emit('jump');
-    return true;
   }
 
   queueTrick(trickId) {
@@ -102,13 +115,7 @@ export class Diver {
 
   startTrick(trickId) {
     const trick = TRICKS[trickId];
-    this.current = {
-      trick,
-      t: 0,
-      startAngle: this.angle,
-      startTwist: this.twist,
-    };
-    this.arms = trick.shape === 'tuck' ? 'tuck' : trick.shape === 'pike' ? 'pike' : trick.shape === 'straight' ? 'cross' : 'out';
+    this.current = { trick, t: 0, startAngle: this.angle, startTwist: this.twist };
     this.emit('trickStart', { trick, timeLeft: this.impactT - this.airT });
   }
 
@@ -129,30 +136,31 @@ export class Diver {
       this.lockDelta = timeLeft;
     }
     this.lockAngleTarget = nearestVertical(this.angle) + (this.plan ? this.plan.entryAngleOffset : 0);
-    this.arms = 'up';
-    this.tuck = 0;
-    this.pike = 0;
     this.emit('lock', { timeLeft, early: this.lockedEarly });
     return true;
   }
 
   // ---- update ------------------------------------------------------------
 
-  update(dt, env, rand) {
+  update(dt, env, rand, time) {
     this.stateT += dt;
     switch (this.state) {
       case 'idle':
       case 'ready':
-        this.updateIdle(dt);
-        break;
-      case 'walking':
-        this.updateWalking(dt);
-        break;
       case 'hesitate':
         this.updateIdle(dt);
         break;
       case 'crouch':
         this.updateIdle(dt);
+        if (this.stateT >= CROUCH_TIME) this.setState('launch');
+        break;
+      case 'launch':
+        this.y = -HIP_HEIGHT + 0.06 * (1 - this.stateT / LAUNCH_TIME); // rising out of the crouch
+        this.x += 0.6 * dt;
+        if (this.stateT >= LAUNCH_TIME) this.takeOff(env);
+        break;
+      case 'walking':
+        this.updateWalking(dt);
         break;
       case 'airborne':
         this.updateAirborne(dt, env);
@@ -160,23 +168,37 @@ export class Diver {
       case 'entering':
         this.updateEntering(dt, env);
         break;
+      case 'surfacing': {
+        const k = clamp(this.stateT / 0.6, 0, 1);
+        const ease = 1 - (1 - k) * (1 - k);
+        this.y = lerp(this.sinkDepth, env.height + 0.12, ease);
+        this.x += 0.5 * dt;
+        this.angle = lerp(this.angle, 0, Math.min(1, dt * 6));
+        this.vy = 0;
+        if (this.stateT >= 0.6) {
+          this.setState('swimming');
+          this.emit('surfaced');
+        }
+        break;
+      }
       case 'swimming':
-        this.x += 1.8 * dt;
-        this.y = env.height + 0.25 + Math.sin(this.stateT * 6) * 0.05;
+        this.x += 1.7 * dt;
+        this.y = env.height + 0.12 + Math.sin(this.stateT * 5) * 0.03;
+        this.angle = Math.sin(this.stateT * 5) * 2;
         if (this.stateT > 4) this.setState('gone');
         break;
       default:
         break;
     }
+    if (this.state !== 'gone') this.rig.update(dt, this, env, time);
     void rand;
   }
 
   updateIdle(dt) {
-    // Standing on the cliff top. Nervous wobble handled by the renderer.
-    this.y = -HIP_HEIGHT;
+    // Standing on the cliff top; the rig handles the nervous animation.
+    const crouchDrop = this.state === 'crouch' ? 0.1 * clamp(this.stateT / CROUCH_TIME, 0, 1) : 0;
+    this.y = -HIP_HEIGHT + crouchDrop;
     this.angle = lerp(this.angle, 0, Math.min(1, dt * 10));
-    this.tuck = lerp(this.tuck, this.state === 'crouch' ? 0.35 : 0, Math.min(1, dt * 10));
-    this.pike = 0;
     this.twist = 0;
   }
 
@@ -192,7 +214,7 @@ export class Diver {
     } else {
       this.x += dir * step;
     }
-    this.y = -HIP_HEIGHT;
+    this.y = -HIP_HEIGHT + Math.abs(Math.sin(this.stateT * 8.5)) * 0.02;
   }
 
   updateAirborne(dt, env) {
@@ -210,19 +232,15 @@ export class Diver {
       const c = this.current;
       c.t += dt;
       const p = clamp(c.t / c.trick.duration, 0, 1);
-      // Mostly-linear rotation with a touch of ease at the ends looks natural.
-      const rot = p < 0.1 ? 5 * p * p : p > 0.9 ? 1 - 5 * (1 - p) * (1 - p) : 0.5 + (p - 0.5) * 1.0;
-      void rot;
-      this.angle = c.startAngle + c.trick.flip * 360 * p;
-      this.twist = c.startTwist + c.trick.twist * p;
-      const fold = Math.sin(Math.PI * p);
-      this.tuck = c.trick.shape === 'tuck' || c.trick.shape === 'side' ? fold : 0;
-      this.pike = c.trick.shape === 'pike' ? fold : 0;
+      // Tucked shapes spin faster through the middle (angular momentum).
+      const peak = c.trick.shape === 'tuck' || c.trick.shape === 'side' ? 0.75 : c.trick.shape === 'layout' ? 0.45 : 0.55;
+      const s = spinProfile(p, peak);
+      this.angle = c.startAngle + c.trick.flip * 360 * s;
+      this.twist = c.startTwist + c.trick.twist * spinProfile(p, 0.5);
       if (p >= 1) {
         this.completed.push(c.trick.id);
         this.current = null;
         this.emit('trickDone', { trick: c.trick });
-        this.arms = 'out';
         if (this.queue.length > 0) this.startTrick(this.queue.shift());
       }
     } else if (this.locked) {
@@ -233,12 +251,8 @@ export class Diver {
       // Finish any partial twist.
       const tw = Math.round(this.twist * 2) / 2;
       this.twist += clamp(tw - this.twist, -2 * dt, 2 * dt);
-      this.tuck = lerp(this.tuck, 0, Math.min(1, dt * 12));
-      this.pike = lerp(this.pike, 0, Math.min(1, dt * 12));
     } else {
-      // Free-fall without input: body drifts slightly, arms flail a bit.
-      this.tuck = lerp(this.tuck, 0, Math.min(1, dt * 6));
-      this.pike = lerp(this.pike, 0, Math.min(1, dt * 6));
+      // Free-fall without input: the body drifts slightly.
       this.angle += (this.plan ? 0 : 6) * dt;
     }
 
@@ -267,17 +281,20 @@ export class Diver {
   }
 
   updateEntering(dt, env) {
-    // Sink and slow down, then swim off.
-    this.vy = lerp(this.vy, 0, Math.min(1, dt * 3));
-    this.y += this.vy * dt * 0.6;
-    this.x += 0.4 * dt;
-    this.angle = lerp(this.angle, nearestVertical(this.angle), Math.min(1, dt * 4));
-    if (this.stateT > 1.2) {
-      this.y = env.height + 0.25;
-      this.angle = 0;
-      this.arms = 'swim';
-      this.setState('swimming');
-      this.emit('surfaced');
+    // Water drag: a clean entry slices deep, a flop stops short.
+    const clean = clamp(1 - this.entryAngleErr / 60, 0, 1);
+    const drag = 2.2 + (1 - clean) * 6;
+    this.vy *= Math.exp(-drag * dt);
+    this.y += this.vy * dt;
+    this.x += (0.2 + this.vx * 0.1) * dt;
+    this.vx *= Math.exp(-3 * dt);
+    // Tumble to a float: the body relaxes toward horizontal-ish face-down.
+    const target = nearestVertical(this.angle) + (this.entryAngleErr > 25 ? 60 : 20);
+    this.angle = lerp(this.angle, target, Math.min(1, dt * 1.5));
+    this.twist = lerp(this.twist, Math.round(this.twist * 2) / 2, Math.min(1, dt * 4));
+    if (this.stateT > 0.9) {
+      this.sinkDepth = this.y;
+      this.setState('surfacing');
     }
   }
 
@@ -395,7 +412,7 @@ export class World {
 
   update(dt) {
     this.time += dt;
-    for (const d of this.divers) d.update(dt, this, this.rand);
+    for (const d of this.divers) d.update(dt, this, this.rand, this.time);
     for (const s of this.splashes) s.update(dt, this.gravity);
     this.splashes = this.splashes.filter((s) => !s.done);
   }

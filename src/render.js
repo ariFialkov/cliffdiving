@@ -1,6 +1,7 @@
 // Canvas renderer: cartoon side view of the cliff, water and stickmen.
 
 import { HIP_HEIGHT } from './world.js';
+import { BONES } from './rig.js';
 
 const TAU = Math.PI * 2;
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -323,127 +324,131 @@ export class Renderer {
 
   drawDiver(ctx, d, world) {
     const ppm = this.camera.ppm;
+    const pts = d.rig.points;
+    if (!pts) return;
     const [sx, sy] = this.toScreen(d.x, d.y);
-    if (sx < -100 || sx > this.w + 100 || sy < -150 || sy > this.h + 150) return;
-    const t = this.time;
-    const idle = d.state === 'idle' || d.state === 'ready' || d.state === 'hesitate' || d.state === 'crouch' || d.state === 'walking';
-    const nervous = idle ? Math.sin(t * 14 + d.idleSeed) * 0.012 : 0;
-    const breathe = idle ? Math.sin(t * 2.5 + d.idleSeed) * 0.02 : 0;
-    const lw = Math.max(2, ppm * 0.085);
-    const skin = '#ffd9b3';
-    const ink = '#232637';
-
+    if (sx < -150 || sx > this.w + 150 || sy < -200 || sy > this.h + 200) return;
+    const ink = '#1b1d2a';
+    const lw = Math.max(2, ppm * 0.07);
+    const S = (p) => this.toScreen(p.x, p.y);
+    const line = (...ps) => {
+      ctx.beginPath();
+      ps.forEach((p, i) => {
+        const [x, y] = S(p);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    };
     ctx.save();
-    ctx.translate(sx + nervous * ppm, sy);
-    ctx.scale(ppm, ppm);
-    const peek = d.state === 'ready' || d.state === 'hesitate' ? 0.18 : d.state === 'idle' ? 0.05 : 0;
-    ctx.rotate(((d.angle + (idle ? (d.lean + peek * 60) : 0)) * Math.PI) / 180);
-    // Twist: squash horizontally to fake rotation about the long axis.
-    const twistScale = d.twist ? Math.cos(d.twist * TAU) : 1;
-    const sxScale = idle ? 1 : Math.sign(twistScale || 1) * Math.max(0.28, Math.abs(twistScale));
-    ctx.scale(sxScale, 1);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = lw / ppm;
+    const t = this.time;
+    const underwater = d.state === 'entering';
+    if (underwater) ctx.globalAlpha = 0.85;
 
-    const walkPhase = d.state === 'walking' ? Math.sin(t * 9) : 0;
-    // Legs
-    const tuck = d.tuck;
-    const pike = d.pike;
-    const legAng = (pike * 115 * Math.PI) / 180; // rotate legs forward about hip
-    const crouch = d.state === 'crouch' ? 0.35 : 0;
-    const bend = Math.max(tuck, crouch);
-    const kneeF = { x: 0.32 * bend + 0.12 * walkPhase, y: 0.42 - 0.3 * bend };
-    const ankF = { x: 0.12 * bend + 0.2 * walkPhase, y: 0.9 - 0.52 * bend };
-    const kneeB = { x: 0.3 * bend - 0.12 * walkPhase, y: 0.44 - 0.28 * bend };
-    const ankB = { x: 0.1 * bend - 0.2 * walkPhase, y: 0.9 - 0.5 * bend };
-    const rot = (p) => ({ x: p.x * Math.cos(legAng) - p.y * Math.sin(legAng), y: p.x * Math.sin(legAng) + p.y * Math.cos(legAng) });
-    const hipY = idle ? -breathe : 0;
+    // Back limbs first (slightly lighter so depth reads).
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = '#3a3d4f';
+    line(pts.hip, pts.kneeB, pts.ankB, pts.toeB);
+    line(pts.shoulder, pts.elbB, pts.wrB);
+    // Hair strands behind the head are drawn before the head.
+    this.drawHair(ctx, d, 'back');
+    // Torso + neck.
     ctx.strokeStyle = ink;
-    for (const [k, a] of [
-      [rot(kneeB), rot(ankB)],
-      [rot(kneeF), rot(ankF)],
-    ]) {
-      ctx.beginPath();
-      ctx.moveTo(0, hipY);
-      ctx.lineTo(k.x, k.y + hipY);
-      ctx.lineTo(a.x, a.y + hipY);
-      ctx.stroke();
-      // feet
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y + hipY);
-      ctx.lineTo(a.x + 0.16, a.y + hipY);
-      ctx.stroke();
-    }
-    // Torso (team colour), curled forward when tucked/piked.
-    const fold = Math.max(tuck * 0.6, pike * 0.5);
-    const shoulder = { x: 0.35 * fold, y: -0.55 + 0.12 * fold + hipY };
+    line(pts.hip, pts.chest, pts.neck);
+    // Speedo: a chunky short stroke at the hips in the team colour.
     ctx.strokeStyle = d.color;
-    ctx.lineWidth = (lw * 2.4) / ppm;
-    ctx.beginPath();
-    ctx.moveTo(0, hipY);
-    ctx.quadraticCurveTo(0.08 * fold, -0.3 + hipY, shoulder.x, shoulder.y);
-    ctx.stroke();
-    // Arms
+    ctx.lineWidth = lw * 2.1;
+    const sp = pts.local;
+    const spTop = { x: sp.hip.x + Math.sin(d.rig.angles.spine1) * 0.1, y: sp.hip.y + Math.cos(d.rig.angles.spine1) * 0.1 };
+    const spF = { x: sp.hip.x + Math.sin(d.rig.angles.legFu) * 0.12, y: sp.hip.y + Math.cos(d.rig.angles.legFu) * 0.12 };
+    const spB = { x: sp.hip.x + Math.sin(d.rig.angles.legBu) * 0.12, y: sp.hip.y + Math.cos(d.rig.angles.legBu) * 0.12 };
+    const w = (p) => {
+      const q = this.rigToWorld(d, p);
+      return q;
+    };
+    line(w(spB), w(sp.hip), w(spF));
+    line(w(spTop), w(sp.hip));
+    // Front limbs.
     ctx.strokeStyle = ink;
-    ctx.lineWidth = lw / ppm;
-    const arms = this.armPoses(d, t, fold, shoulder);
-    for (const [e, hnd] of arms) {
+    ctx.lineWidth = lw;
+    line(pts.hip, pts.kneeF, pts.ankF, pts.toeF);
+    line(pts.shoulder, pts.elbF, pts.wrF);
+    // Head.
+    const [hx, hy] = S(pts.headC);
+    const hr = BONES.headR * ppm;
+    ctx.fillStyle = '#fbe9d6';
+    ctx.beginPath();
+    ctx.arc(hx, hy, hr, 0, TAU);
+    ctx.fill();
+    ctx.lineWidth = lw * 0.9;
+    ctx.stroke();
+    // Face: eyes and mouth, oriented with the head.
+    const fwd = pts.headFwd;
+    const up = { x: -pts.headUp.x, y: -pts.headUp.y }; // screen-space "up" on the face (y grows down)
+    const ex = hx + (fwd.x * 0.045 + up.x * 0.02) * ppm;
+    const ey = hy + (fwd.y * 0.045 + up.y * 0.02) * ppm;
+    const nervous = d.state === 'ready' || d.state === 'hesitate' || d.state === 'crouch';
+    const closed = underwater || d.rig.blink > 0 || (d.locked && d.state === 'airborne');
+    ctx.fillStyle = ink;
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = Math.max(1.5, lw * 0.5);
+    const eye = (ox, oy) => {
+      const x = ex + (fwd.x * ox + up.x * oy) * ppm;
+      const y = ey + (fwd.y * ox + up.y * oy) * ppm;
+      if (closed) {
+        ctx.beginPath();
+        ctx.moveTo(x - fwd.x * 0.015 * ppm, y - fwd.y * 0.015 * ppm);
+        ctx.lineTo(x + fwd.x * 0.015 * ppm, y + fwd.y * 0.015 * ppm);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(1.2, ppm * 0.016), 0, TAU);
+        ctx.fill();
+      }
+    };
+    eye(0, 0);
+    eye(0.05, 0.005);
+    if (nervous) {
+      // Raised worried brows and a wobbly mouth.
       ctx.beginPath();
-      ctx.moveTo(shoulder.x, shoulder.y);
-      ctx.lineTo(e.x, e.y);
-      ctx.lineTo(hnd.x, hnd.y);
+      ctx.moveTo(ex + (fwd.x * -0.01 + up.x * 0.04) * ppm, ey + (fwd.y * -0.01 + up.y * 0.04) * ppm);
+      ctx.lineTo(ex + (fwd.x * 0.07 + up.x * 0.05) * ppm, ey + (fwd.y * 0.07 + up.y * 0.05) * ppm);
+      ctx.stroke();
+      const wob = Math.sin(t * 22) * 0.006;
+      ctx.beginPath();
+      ctx.moveTo(ex + (fwd.x * 0.0 + up.x * -0.045) * ppm, ey + (fwd.y * 0.0 + up.y * -0.045) * ppm);
+      ctx.lineTo(ex + (fwd.x * 0.03 + up.x * (-0.055 + wob)) * ppm, ey + (fwd.y * 0.03 + up.y * (-0.055 + wob)) * ppm);
+      ctx.lineTo(ex + (fwd.x * 0.06 + up.x * -0.045) * ppm, ey + (fwd.y * 0.06 + up.y * -0.045) * ppm);
+      ctx.stroke();
+    } else if (d.state === 'swimming' || d.state === 'surfacing') {
+      ctx.beginPath();
+      ctx.moveTo(ex + (fwd.x * 0.0 + up.x * -0.045) * ppm, ey + (fwd.y * 0.0 + up.y * -0.045) * ppm);
+      ctx.quadraticCurveTo(ex + (fwd.x * 0.03 + up.x * -0.075) * ppm, ey + (fwd.y * 0.03 + up.y * -0.075) * ppm, ex + (fwd.x * 0.065 + up.x * -0.04) * ppm, ey + (fwd.y * 0.065 + up.y * -0.04) * ppm);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(ex + (fwd.x * 0.005 + up.x * -0.045) * ppm, ey + (fwd.y * 0.005 + up.y * -0.045) * ppm);
+      ctx.lineTo(ex + (fwd.x * 0.055 + up.x * -0.045) * ppm, ey + (fwd.y * 0.055 + up.y * -0.045) * ppm);
       ctx.stroke();
     }
-    // Head
-    const head = { x: shoulder.x + 0.08 * fold, y: shoulder.y - 0.2 + 0.05 * fold };
-    const headR = 0.165;
-    ctx.fillStyle = skin;
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, headR, 0, TAU);
-    ctx.fill();
-    ctx.stroke();
-    // Hair / cap in team colour
-    ctx.fillStyle = d.color;
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, headR, Math.PI * 1.05, Math.PI * 1.95);
-    ctx.closePath();
-    ctx.fill();
-    // Face: eyes + mouth, nervous when idle
-    const nervousFace = idle && (d.state === 'ready' || d.state === 'hesitate' || d.isPlayer);
-    ctx.fillStyle = ink;
-    const eyeDx = 0.06;
-    const eyeDy = nervousFace ? 0.02 : -0.01;
-    ctx.beginPath();
-    ctx.arc(head.x + eyeDx, head.y + eyeDy, 0.022, 0, TAU);
-    ctx.arc(head.x + eyeDx + 0.065, head.y + eyeDy, 0.022, 0, TAU);
-    ctx.fill();
-    ctx.lineWidth = (lw * 0.6) / ppm;
-    ctx.beginPath();
-    if (nervousFace) {
-      // wobbly worried mouth
-      ctx.moveTo(head.x + 0.03, head.y + 0.08);
-      ctx.quadraticCurveTo(head.x + 0.06, head.y + 0.06 + Math.sin(t * 20) * 0.01, head.x + 0.09, head.y + 0.085);
-      ctx.quadraticCurveTo(head.x + 0.12, head.y + 0.1, head.x + 0.14, head.y + 0.07);
-    } else if (d.state === 'swimming') {
-      ctx.arc(head.x + 0.08, head.y + 0.05, 0.045, 0.1, Math.PI - 0.1);
-    } else {
-      ctx.moveTo(head.x + 0.04, head.y + 0.075);
-      ctx.lineTo(head.x + 0.13, head.y + 0.075);
-    }
-    ctx.stroke();
-    // Sweat drop when nervous at the edge
-    if (nervousFace && d.state !== 'idle') {
+    // Hair in front.
+    this.drawHair(ctx, d, 'front');
+    // Sweat drop when nervous at the edge.
+    if (nervous && d.state !== 'crouch') {
       const dropT = (t * 1.5 + d.idleSeed) % 1;
       ctx.fillStyle = '#4fb0ea';
       ctx.beginPath();
-      ctx.arc(head.x - 0.14, head.y - 0.1 + dropT * 0.18, 0.03, 0, TAU);
+      ctx.arc(hx - fwd.x * hr * 1.15, hy - hr * 0.3 + dropT * hr * 0.9, Math.max(1.5, ppm * 0.025), 0, TAU);
       ctx.fill();
     }
     ctx.restore();
 
-    // Name tag above idle divers
-    if (idle && d.state !== 'walking') {
+    // Name tag above standing divers.
+    const idle = ['idle', 'ready', 'hesitate', 'crouch'].includes(d.state);
+    if (idle) {
+      const [tx, ty] = S(pts.headC);
       ctx.save();
       ctx.font = `600 ${Math.round(ppm * 0.28)}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
@@ -452,69 +457,68 @@ export class Renderer {
       const tw = ctx.measureText(label).width + ppm * 0.3;
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.beginPath();
-      ctx.roundRect(sx - tw / 2, sy - ppm * 1.55, tw, ppm * 0.4, 6);
+      ctx.roundRect(tx - tw / 2, ty - ppm * 0.75, tw, ppm * 0.4, 6);
       ctx.fill();
       ctx.fillStyle = d.isPlayer ? '#d23c3c' : '#2a3350';
-      ctx.fillText(label, sx, sy - ppm * 1.2);
+      ctx.fillText(label, tx, ty - ppm * 0.4);
       ctx.restore();
     }
     void world;
   }
 
-  armPoses(d, t, fold, shoulder) {
-    const s = shoulder;
-    switch (d.arms) {
-      case 'up':
-        return [
-          [{ x: s.x + 0.05, y: s.y - 0.32 }, { x: s.x + 0.06, y: s.y - 0.62 }],
-          [{ x: s.x - 0.05, y: s.y - 0.32 }, { x: s.x - 0.06, y: s.y - 0.62 }],
-        ];
-      case 'tuck':
-        return [
-          [{ x: s.x + 0.25, y: s.y + 0.15 }, { x: s.x + 0.28, y: s.y + 0.42 }],
-          [{ x: s.x + 0.22, y: s.y + 0.18 }, { x: s.x + 0.26, y: s.y + 0.45 }],
-        ];
-      case 'pike':
-        return [
-          [{ x: s.x + 0.3, y: s.y + 0.25 }, { x: s.x + 0.55, y: s.y + 0.45 }],
-          [{ x: s.x + 0.28, y: s.y + 0.28 }, { x: s.x + 0.52, y: s.y + 0.48 }],
-        ];
-      case 'cross':
-        return [
-          [{ x: s.x + 0.12, y: s.y + 0.1 }, { x: s.x - 0.1, y: s.y + 0.2 }],
-          [{ x: s.x - 0.12, y: s.y + 0.1 }, { x: s.x + 0.1, y: s.y + 0.2 }],
-        ];
-      case 'swim': {
-        const ph = Math.sin(t * 6);
-        return [
-          [{ x: s.x + 0.3, y: s.y - 0.1 * ph }, { x: s.x + 0.55, y: s.y + 0.05 }],
-          [{ x: s.x - 0.3, y: s.y + 0.1 * ph }, { x: s.x - 0.55, y: s.y + 0.05 }],
-        ];
-      }
-      case 'out': {
-        const fl = Math.sin(t * 9) * 0.06;
-        return [
-          [{ x: s.x + 0.3, y: s.y - 0.12 + fl }, { x: s.x + 0.58, y: s.y - 0.3 - fl }],
-          [{ x: s.x - 0.3, y: s.y - 0.12 - fl }, { x: s.x - 0.58, y: s.y - 0.3 + fl }],
-        ];
-      }
-      case 'nervous':
-      default: {
-        // Arms slightly out, hands wringing / shaking.
-        const sh = Math.sin(t * 16 + d.idleSeed) * 0.015;
-        const peek = d.state === 'ready' || d.state === 'hesitate';
-        if (peek) {
-          return [
-            [{ x: s.x + 0.22, y: s.y + 0.2 }, { x: s.x + 0.12 + sh, y: s.y + 0.02 }],
-            [{ x: s.x - 0.18, y: s.y + 0.22 }, { x: s.x + 0.08 - sh, y: s.y + 0.04 }],
-          ];
-        }
-        return [
-          [{ x: s.x + 0.2, y: s.y + 0.28 }, { x: s.x + 0.26 + sh, y: s.y + 0.55 }],
-          [{ x: s.x - 0.2, y: s.y + 0.28 }, { x: s.x - 0.26 - sh, y: s.y + 0.55 }],
-        ];
+  rigToWorld(d, p) {
+    const bodyAngle = (d.angle * Math.PI) / 180;
+    const sx = d.rig.points.facing;
+    const x = p.x * sx;
+    const y = p.y;
+    return { x: d.x + x * Math.cos(bodyAngle) - y * Math.sin(bodyAngle), y: d.y + x * Math.sin(bodyAngle) + y * Math.cos(bodyAngle) };
+  }
+
+  drawHair(ctx, d, layer) {
+    const rig = d.rig;
+    const ppm = this.camera.ppm;
+    ctx.save();
+    if (layer === 'front' && rig.style.scalp) {
+      // Hair hugging the crown: an arc on the head's rim from the front span to the back span.
+      const h = rig.points.headC;
+      const [hx, hy] = this.toScreen(h.x, h.y);
+      const up = rig.points.headUp;
+      const upAng = Math.atan2(up.y, up.x);
+      const [front, back] = rig.style.scalp;
+      const dir = rig.points.facing; // canvas angles grow clockwise; the face is at upAng + dir·90°
+      const a0 = upAng + ((front * Math.PI) / 180) * dir;
+      const a1 = upAng - ((back * Math.PI) / 180) * dir;
+      ctx.strokeStyle = rig.hairColor;
+      ctx.lineWidth = Math.max(2, ppm * 0.045);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(hx, hy, BONES.headR * ppm * 0.98, Math.min(a0, a1), Math.max(a0, a1));
+      ctx.stroke();
+    }
+    if (!rig.strands.length) {
+      ctx.restore();
+      return;
+    }
+    ctx.strokeStyle = rig.hairColor;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const baseW = rig.style.width * ppm;
+    for (const st of rig.strands) {
+      // Strands rooted toward the back of the head go behind it.
+      const behind = st.rootAngle > 0.9;
+      if ((layer === 'back') !== behind) continue;
+      const pts = st.pts;
+      for (let i = 1; i < pts.length; i++) {
+        ctx.lineWidth = Math.max(1.5, baseW * (1 - (i - 1) / pts.length * 0.6));
+        const [x0, y0] = this.toScreen(pts[i - 1].x, pts[i - 1].y);
+        const [x1, y1] = this.toScreen(pts[i].x, pts[i].y);
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.stroke();
       }
     }
+    ctx.restore();
   }
 
   drawSplash(ctx, s) {
