@@ -76,7 +76,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .lock-meter .track { position: relative; width: 14px; height: 160px; background: rgba(255,255,255,0.4); border-radius: 999px; overflow: hidden; }
 .lock-meter .fill { position: absolute; bottom: 0; left: 0; right: 0; height: 0%; background: #fff; border-radius: 999px; }
 .lock-meter .sweet { position: absolute; left: 0; right: 0; bottom: 64%; height: 16%; background: rgba(242,177,52,0.85); }
-.lock-meter .label { font-size: 10px; font-weight: 900; color: #fff; letter-spacing: 1px; text-shadow: 0 1px 0 rgba(0,0,0,0.3); }
+.lock-meter .label { font-size: 10px; font-weight: 900; color: #fff; letter-spacing: 1px; text-shadow: 0 1px 0 rgba(0,0,0,0.3); text-align: center; line-height: 1.2; }
 
 .help { position: absolute; left: 12px; bottom: calc(var(--safe-bottom) + 12px); width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(255,255,255,0.9); color: var(--ink); font-weight: 900; font-size: 18px; box-shadow: var(--shadow); }
 
@@ -209,3 +209,15 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .charge-meter .label { font-size: 10px; font-weight: 900; color: #fff; letter-spacing: 1px; text-shadow: 0 1px 0 rgba(0,0,0,0.3); }
 .charge-meter.full .track { animation: pulse-glow 0.4s ease-in-out infinite; }
 @keyframes pulse-glow { 50% { box-shadow: 0 0 0 4px rgba(242,177,52,0.6); } }
+
+/* Body-angle gauge */
+.angle-gauge { position: absolute; right: 8px; top: calc(50% + 112px); }
+.angle-gauge .ring { fill: rgba(255,255,255,0.35); stroke: rgba(255,255,255,0.7); stroke-width: 3; }
+.angle-gauge .tick { stroke: #fff; stroke-width: 4; stroke-linecap: round; }
+.angle-gauge .body line { stroke: #1b1d2a; stroke-width: 5; stroke-linecap: round; }
+.angle-gauge .body circle { fill: #fff; stroke: #1b1d2a; stroke-width: 3; }
+.angle-gauge.near .ring { stroke: var(--gold); }
+.angle-gauge.ok .ring { stroke: #3fbf4f; fill: rgba(63,191,79,0.3); }
+.gesture-list .list-head { display: block; background: none; font-weight: 900; font-size: 12px; color: var(--ink-soft); padding: 8px 2px 2px; grid-column: 1 / -1; }
+.gesture-list li.combo .arrow { font-size: 15px; letter-spacing: -1px; }
+.gesture-list li.combo .tdiff { color: #b5179e; }

@@ -23,10 +23,21 @@ Any static file server works too; the service worker needs `http(s)://`, not `fi
 | Charge and jump | Hold click or Space (up to 1 s), release | Hold the screen, release |
 | Trick | Flick the mouse / trackpad (no click) | Swipe |
 | Tucked variant | Hold Shift while flicking | Keep a second finger on the screen |
-| Lock entry | Click / Space just before the water | Tap |
+| Rotate forward (straight dive position) | Hold Shift on its own, or hold the mouse button | Hold one finger still |
+| Streamline for entry | Click / Space just before the water | Tap |
 
 A quick tap is the minimum hop. A full one-second charge launches the diver about
 2.5 m higher and adds close to a second of air time for tricks.
+
+### Loose rotation
+
+Flips are physical: each one adds angular momentum, the body spins faster when tucked and slower
+when straight, and some spin carries on after the kick-out before it dies away. The swipe's
+length and speed set its power (about 72 % to 128 %), so a soft swipe under-rotates and a big,
+fast one over-rotates. Hold to rotate forward and line up the entry yourself: feet-first, or
+head-first, which splashes less and scores a bonus. A gauge on the right shows the body angle
+and turns green when you're straight. Twists and sideflips always square themselves up; only
+the flip axis is loose. Streamlining no longer straightens you out; it just stops the spin.
 
 | Gesture | Trick | Difficulty |
 | --- | --- | --- |
@@ -34,15 +45,31 @@ A quick tap is the minimum hop. A full one-second charge launches the diver abou
 | Shift + ↓ | Front Tuck | 1.0 |
 | ↑ | Backflip (layout) | 1.4 |
 | Shift + ↑ | Back Tuck | 1.2 |
-| ↑ then ↓ in one stroke | Gainer (legs trail behind) | 1.6 |
+| ↑ then ↓ in one stroke | Gainer (legs split and trail) | 1.6 |
 | ← or → | Corkscrew (full twist) | 1.3 |
 | ↘ or ↙ | Sideflip (tucked) | 1.3 |
 | ↓ then ↑ (a ✓) | Jackknife | 0.8 |
 | ↓ then sideways (an L) | Barani (front flip + half twist) | 1.7 |
 
-Two-part gestures can be one continuous stroke or two quick strokes; a stroke that could be the
-first half of a compound waits 170 ms for its second half. Keyboard: arrow keys (with Shift for
-tucks), G gainer, J jackknife, B barani, S sideflip.
+### Combos
+
+Fire a second trick while the first is still in its first 60 % and they merge into one bigger
+trick (either order works for twisting combos):
+
+| Combo | Made from | Difficulty |
+| --- | --- | --- |
+| Front Twister | Front Flip + Corkscrew | 3.2 |
+| Back Twister | Backflip + Corkscrew | 3.4 |
+| Double Front | Front Tuck ×2 | 2.9 |
+| Double Back | Back Tuck ×2 | 3.2 |
+| Gainer Full | Gainer + Corkscrew | 3.6 |
+| Rudy | Barani + Corkscrew | 3.8 |
+| Double Corkscrew | Corkscrew ×2 | 2.8 |
+
+Two-part gestures (✓, L, up-down) must be one continuous stroke on touch; with a mouse a stall
+of under ~90 ms at the corner still counts. Separate strokes are separate tricks, which is how
+combos are fired. Keyboard: arrow keys (with Shift for tucks), G gainer, J jackknife, B barani,
+S sideflip.
 
 The tutorial shows automatically on first launch and can be reopened with the `?` button.
 

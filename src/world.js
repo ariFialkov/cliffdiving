@@ -1,8 +1,8 @@
 // Simulation: divers, physics, trick execution and bot behaviour.
 // Units: metres. x grows toward the water, y grows downward (cliff top = 0).
 
-import { TRICKS } from './tricks.js';
-import { LOCK_WINDOW, LOCK_SWEET, LOCK_TOLERANCE } from './scoring.js';
+import { TRICKS, comboFor } from './tricks.js';
+import { LOCK_WINDOW, LOCK_SWEET, LOCK_TOLERANCE, HEAD_FIRST_BONUS, ANGLE_WEIGHT, TIMING_WEIGHT } from './scoring.js';
 import { Rig, STANDING_HIP_HEIGHT } from './rig.js';
 
 export const HIP_HEIGHT = STANDING_HIP_HEIGHT; // hip above the cliff top when standing
@@ -15,6 +15,36 @@ export const CHARGE_TIME = 1.0; // seconds of holding for full power
 const MIN_CROUCH = 0.12; // a tap still dips before leaving the ground
 const LAUNCH_TIME = 0.1;
 const SURFACE_TIME = 0.8;
+
+// Rotation physics (pitch). A trick sets an angular momentum L (expressed as
+// the spin rate, deg/s, the body would have when fully open). Folding into a
+// tuck/pike cuts the moment of inertia so the body spins faster; opening out
+// slows it again, and the leftover open-body spin bleeds off with SPIN_TAU as
+// the diver "checks" the rotation. L is chosen so that a power-1.0 swipe ends
+// exactly on its nominal rotation once the residual has died away.
+export const SPIN_TAU = 0.2;
+const LOCK_TAU = 0.07; // streamlining for entry kills spin quickly
+export const HOLD_RATE = 270; // deg/s forward rotation while holding
+export const HOLD_ACCEL = 1500;
+export const HOLD_DECEL = 2200;
+export const COMBO_MAX_P = 0.6; // a combo needs the 2nd trick within the first 60% of the 1st
+const INERTIA_K = { tuck: 0.7, pike: 0.55, gainer: 0.3, layout: 0.25, straight: 0.25, twist: 0.15 };
+
+function fold(p) {
+  return Math.sin(Math.PI * clamp(p, 0, 1)) ** 0.8;
+}
+
+/** ∫ dt / (1 − k·fold) from progress p0 to 1, for a trick of duration T. */
+function inertiaIntegral(T, k, p0 = 0) {
+  const n = 32;
+  const span = 1 - p0;
+  let acc = 0;
+  for (let i = 0; i < n; i++) {
+    const p = p0 + ((i + 0.5) / n) * span;
+    acc += 1 / (1 - k * fold(p));
+  }
+  return (acc / n) * span * T;
+}
 const GROUNDED = new Set(['idle', 'ready', 'hesitate', 'walking', 'charging', 'launch']);
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -32,6 +62,11 @@ export function angleError(angle) {
 export function entryTilt(pitchDeg, rollRev) {
   const c = Math.abs(Math.cos((pitchDeg * Math.PI) / 180) * Math.cos(rollRev * 2 * Math.PI));
   return (Math.acos(clamp(c, 0, 1)) * 180) / Math.PI;
+}
+
+/** Is the head below the hips (a head-first entry)? */
+export function isHeadDown(pitchDeg, rollRev) {
+  return Math.cos((pitchDeg * Math.PI) / 180) * Math.cos(rollRev * 2 * Math.PI) < 0;
 }
 
 export function jumpVelocity(charge) {
@@ -89,6 +124,10 @@ export class Diver {
     this.onEvent = null;
     this.sinkDepth = 0;
     this.swimPitch = 90;
+    // rotation physics
+    this.spinL = 0; // open-body spin rate (deg/s) left over from tricks
+    this.holding = false; // hold-to-rotate input
+    this.holdOmega = 0;
   }
 
   setState(s) {
@@ -132,31 +171,85 @@ export class Diver {
     this.angle = 0;
     this.twist = 0;
     this.roll = 0;
+    this.spinL = 0;
+    this.holdOmega = 0;
     const drop = env.height - IMPACT_OFFSET - this.y;
     const g = env.gravity;
     this.impactT = (-this.vy + Math.sqrt(this.vy * this.vy + 2 * g * drop)) / g;
     this.emit('jump');
-    if (this.queue.length) this.startTrick(this.queue.shift());
+    if (this.queue.length) {
+      const q = this.queue.shift();
+      this.startTrick(q.id, q.power);
+    }
   }
 
-  queueTrick(trickId) {
+  /**
+   * Request a trick. Returns 'start', 'queued', 'combo' or false. A second
+   * trick fired early in the first one merges into a combination trick.
+   */
+  queueTrick(trickId, power = 1) {
     if (this.locked) return false;
     if (this.state === 'launch') {
+      const prev = this.queue[0];
+      const combo = prev && comboFor(prev.id, trickId);
+      if (combo) {
+        this.queue[0] = { id: combo, power: (prev.power + power) / 2 };
+        return 'combo';
+      }
       if (this.queue.length) return false;
-      this.queue.push(trickId);
-      return true;
+      this.queue.push({ id: trickId, power });
+      return 'queued';
     }
     if (this.state !== 'airborne') return false;
-    if (!this.current) this.startTrick(trickId);
-    else if (this.queue.length < 1) this.queue.push(trickId);
-    else return false;
-    return true;
+    const c = this.current;
+    if (c) {
+      const combo = !c.trick.combo && c.t / c.T < COMBO_MAX_P ? comboFor(c.trick.id, trickId) : null;
+      if (combo) {
+        this.upgradeToCombo(combo, power);
+        return 'combo';
+      }
+      if (this.queue.length >= 1) return false;
+      this.queue.push({ id: trickId, power });
+      return 'queued';
+    }
+    this.startTrick(trickId, power);
+    return 'start';
   }
 
-  startTrick(trickId) {
+  startTrick(trickId, power = 1) {
     const trick = TRICKS[trickId];
-    this.current = { trick, t: 0, startAngle: this.angle, startTwist: this.twist, startRoll: this.roll };
-    this.emit('trickStart', { trick, timeLeft: this.impactT - this.airT });
+    const T = trick.duration;
+    const k = INERTIA_K[trick.shape] ?? 0.4;
+    // Momentum already spinning carries on; the new trick adds its rotation on top.
+    const carry = this.spinL * SPIN_TAU;
+    const targetFinal = this.angle + carry + trick.flip * 360 * power;
+    const L = (targetFinal - this.angle) / (inertiaIntegral(T, k) + SPIN_TAU);
+    this.spinL = 0;
+    this.current = {
+      trick, t: 0, T, k, L, power, flipPower: trick.flip ? power : null,
+      baseAngle: this.angle + carry, startTwist: this.twist, startRoll: this.roll,
+      twistPlan: { from: this.twist, to: this.twist + trick.twist, t0: 0 },
+      rollPlan: { from: this.roll, to: this.roll + trick.roll, t0: 0 },
+    };
+    this.emit('trickStart', { trick, timeLeft: this.impactT - this.airT, power });
+  }
+
+  upgradeToCombo(comboId, power) {
+    const c = this.current;
+    const combo = TRICKS[comboId];
+    const incoming = TRICKS[c.trick.id === combo.parts[0] ? combo.parts[1] : combo.parts[0]];
+    // Flip power: average the parts that actually flip.
+    const powers = [c.flipPower, incoming.flip ? power : null].filter((x) => x != null);
+    const pw = powers.length ? powers.reduce((a, b) => a + b, 0) / powers.length : 1;
+    c.trick = combo;
+    c.T = Math.max(combo.duration, c.t + 0.3);
+    c.k = INERTIA_K[combo.shape] ?? 0.4;
+    c.flipPower = pw;
+    const targetFinal = c.baseAngle + combo.flip * 360 * pw;
+    c.L = (targetFinal - this.angle) / (inertiaIntegral(c.T, c.k, c.t / c.T) + SPIN_TAU);
+    c.twistPlan = { from: this.twist, to: c.startTwist + combo.twist, t0: c.t };
+    c.rollPlan = { from: this.roll, to: c.startRoll + combo.roll, t0: c.t };
+    this.emit('combo', { trick: combo });
   }
 
   lock() {
@@ -165,7 +258,9 @@ export class Diver {
     this.locked = true;
     this.queue = [];
     if (this.current) {
+      // Bailing out of a trick: the body opens and keeps whatever spin it had.
       this.aborted = this.current.trick;
+      this.spinL = this.current.L;
       this.current = null;
     }
     if (timeLeft > LOCK_WINDOW) {
@@ -174,7 +269,6 @@ export class Diver {
     } else {
       this.lockDelta = timeLeft;
     }
-    this.lockAngleTarget = nearestVertical(this.angle) + (this.plan ? this.plan.entryAngleOffset : 0);
     this.emit('lock', { timeLeft, early: this.lockedEarly });
     return true;
   }
@@ -253,39 +347,59 @@ export class Diver {
 
     if (this.plan) this.updateBotAutopilot();
 
-    if (this.current) {
-      const c = this.current;
-      const tr = c.trick;
+    const c = this.current;
+    if (c) {
       c.t += dt;
-      const p = clamp(c.t / tr.duration, 0, 1);
-      // Tucked shapes spin faster through the middle (angular momentum).
-      const peak = tr.shape === 'tuck' ? 0.75 : tr.shape === 'layout' || tr.shape === 'straight' || tr.shape === 'gainer' ? 0.45 : 0.55;
-      const s = spinProfile(p, peak);
-      this.angle = c.startAngle + tr.flip * 360 * s;
-      this.twist = c.startTwist + tr.twist * spinProfile(p, 0.35);
-      this.roll = c.startRoll + tr.roll * s;
+      const p = clamp(c.t / c.T, 0, 1);
+      // Spin rate rises as the body folds (smaller moment of inertia).
+      this.angle += (c.L / (1 - c.k * fold(p))) * dt;
+      const axis = (plan, peak) => {
+        const q = clamp((c.t - plan.t0) / Math.max(1e-3, c.T - plan.t0), 0, 1);
+        return plan.from + (plan.to - plan.from) * spinProfile(q, peak);
+      };
+      this.twist = axis(c.twistPlan, 0.35);
+      this.roll = axis(c.rollPlan, 0.6);
       if (p >= 1) {
-        this.completed.push(tr.id);
+        this.completed.push(c.trick.id);
+        this.spinL = c.L; // kicked out: open-body spin carries on and bleeds off
+        this.twist = c.twistPlan.to;
+        this.roll = c.rollPlan.to;
         this.current = null;
-        this.emit('trickDone', { trick: tr });
-        if (this.queue.length > 0) this.startTrick(this.queue.shift());
+        this.emit('trickDone', { trick: c.trick });
+        if (this.queue.length > 0) {
+          const q = this.queue.shift();
+          this.startTrick(q.id, q.power);
+        }
       }
-    } else if (this.locked) {
-      // Ease into a streamlined entry line.
-      const d = this.lockAngleTarget - this.angle;
-      this.angle += clamp(d, -260 * dt, 260 * dt);
-      this.twist = settleTo(this.twist, 0.5, 2 * dt);
-      this.roll = settleTo(this.roll, 0.5, 2 * dt);
     } else {
-      this.angle += (this.plan ? 0 : 6) * dt; // untended bodies drift
+      this.angle += this.spinL * dt;
+      this.spinL *= Math.exp(-dt / (this.locked ? LOCK_TAU : SPIN_TAU));
+      if (this.locked) {
+        // Twists and sideflips square themselves up for the entry.
+        this.twist = settleTo(this.twist, 0.5, 2 * dt);
+        this.roll = settleTo(this.roll, 0.5, 2 * dt);
+      }
     }
 
+    // Hold to rotate forward in a straight dive position (not during a trick).
+    if (this.holding && !this.current) this.holdOmega = Math.min(HOLD_RATE, this.holdOmega + HOLD_ACCEL * dt);
+    else this.holdOmega = Math.max(0, this.holdOmega - HOLD_DECEL * dt);
+    this.angle += this.holdOmega * dt;
+
     if (this.airT >= this.impactT) this.enterWater(env);
+  }
+
+  /** Where the pitch will come to rest if nothing else is done. */
+  predictedRestAngle() {
+    return this.angle + this.spinL * (this.locked ? LOCK_TAU : SPIN_TAU) + (this.holdOmega * this.holdOmega) / (2 * HOLD_DECEL);
   }
 
   enterWater(env) {
     const stillTricking = this.current != null;
     this.entryAngleErr = entryTilt(this.angle, this.roll) + (stillTricking ? 10 : 0);
+    this.headFirst = isHeadDown(this.angle, this.roll) && this.entryAngleErr < 30;
+    this.holding = false;
+    this.holdOmega = 0;
     this.setState('entering');
     this.y = env.height - IMPACT_OFFSET;
     this.emit('impact', {
@@ -295,6 +409,7 @@ export class Diver {
       completed: [...this.completed],
       aborted: this.aborted,
       midTrick: stillTricking,
+      headFirst: this.headFirst,
       vy: this.vy,
     });
     this.current = null;
@@ -355,42 +470,89 @@ export class Diver {
     const timeLeft = this.impactT - this.airT;
     if (!plan.started && this.airT >= plan.trickStartDelay) {
       plan.started = true;
-      if (plan.trickIds.length > 0) this.startTrick(plan.trickIds[0]);
+      if (plan.trickIds.length > 0) this.startTrick(plan.trickIds[0], plan.powers[0]);
       plan.nextIndex = 1;
     }
     if (plan.started && !this.current && plan.nextIndex < plan.trickIds.length && !this.locked) {
-      this.startTrick(plan.trickIds[plan.nextIndex]);
+      this.startTrick(plan.trickIds[plan.nextIndex], plan.powers[plan.nextIndex]);
       plan.nextIndex += 1;
     }
-    if (!this.locked && plan.nextIndex >= plan.trickIds.length && !this.current && timeLeft <= plan.lockDelta) this.lock();
-    if (!this.current && !this.locked) this.angle += plan.drift * 0.016;
+    const tricksDone = plan.started && !this.current && plan.nextIndex >= plan.trickIds.length;
+    if (tricksDone && plan.aimTarget == null) {
+      // Line up the entry with the same hold-to-rotate the player uses.
+      const pred = this.predictedRestAngle();
+      if (plan.aimOffset == null) {
+        plan.aimTarget = pred;
+        return this.lockIfDue(tricksDone, timeLeft);
+      }
+      const room = Math.max(0, timeLeft - plan.lockDelta - 0.12) * HOLD_RATE * 0.8;
+      const need = (base) => (((base + plan.aimOffset - pred) % 360) + 360) % 360;
+      const want = plan.headFirst ? 180 : 0;
+      let delta = need(want);
+      if (delta > 340) delta = 0; // a hair past the line: live with it
+      if (delta > room) {
+        const alt = need(want + 180);
+        delta = alt <= room ? alt : 0;
+      }
+      plan.aimTarget = pred + delta;
+    }
+    if (plan.aimTarget != null) this.holding = this.predictedRestAngle() < plan.aimTarget - 0.5;
+    this.lockIfDue(tricksDone, timeLeft);
+  }
+
+  lockIfDue(tricksDone, timeLeft) {
+    if (!this.locked && tricksDone && timeLeft <= this.plan.lockDelta) this.lock();
   }
 }
 
-/** Create a bot's in-air plan from its synthesized dive. */
+/** Create a bot's in-air plan from its synthesized dive (entry quality q). */
 export function makeBotPlan({ trickIds, q, rand, airTime }) {
-  // Decompose q into an angle component and a timing component.
-  let angleQ = clamp(q + rand.range(-0.2, 0.2), 0, 1);
-  let timingQ = (q - 0.55 * angleQ) / 0.45;
+  const tricksDur = trickIds.reduce((a, id) => a + TRICKS[id].duration, 0);
+  const spare = airTime - tricksDur - 0.4;
+  // Good divers like to rip it in head-first when there's time to line it up.
+  const headFirst = q >= 0.3 && spare > 1.0 && rand.chance(q > 0.7 ? 0.75 : 0.4);
+  // q = AW·angleQ + TIMING_WEIGHT·timingQ, where AW includes the head-first bonus.
+  const AW = ANGLE_WEIGHT + (headFirst ? HEAD_FIRST_BONUS : 0);
+  let angleQ = clamp(q / (AW + TIMING_WEIGHT) + rand.range(-0.2, 0.2), 0, 1);
+  let timingQ = (q - AW * angleQ) / TIMING_WEIGHT;
   if (timingQ < 0) {
     timingQ = 0;
-    angleQ = clamp(q / 0.55, 0, 1);
+    angleQ = clamp(q / AW, 0, 1);
   } else if (timingQ > 1) {
     timingQ = 1;
-    angleQ = clamp((q - 0.45) / 0.55, 0, 1);
+    angleQ = clamp((q - TIMING_WEIGHT) / AW, 0, 1);
   }
   const angleErr = (1 - angleQ) * 60;
   const sign = rand.chance(0.5) ? 1 : -1;
   const lockDelta = clamp(LOCK_SWEET + sign * (1 - timingQ) * LOCK_TOLERANCE, 0.02, LOCK_WINDOW - 0.01);
-  const tricksDur = trickIds.reduce((a, id) => a + TRICKS[id].duration, 0);
-  const slack = Math.max(0, airTime - tricksDur - lockDelta - 0.3);
+  const slack = Math.max(0, spare - (headFirst ? 0.8 : 0));
+  let entryAngleOffset = (rand.chance(0.5) ? 1 : -1) * angleErr;
+  // Feet-first bots build their planned miss into the power of their last flip,
+  // so the dive needs no correction time. Head-first bots rotate the last half
+  // turn with hold-to-rotate, like the player.
+  const powers = trickIds.map(() => 1);
+  let aimOffset = entryAngleOffset;
+  const lastFlip = trickIds.map((id, i) => [i, TRICKS[id].flip]).filter(([, f]) => f !== 0).at(-1);
+  if (!headFirst) {
+    if (lastFlip) {
+      const [i, flip] = lastFlip;
+      powers[i] = 1 + entryAngleOffset / (360 * flip);
+      aimOffset = null; // nothing to aim: the flips land where planned
+    } else {
+      entryAngleOffset = Math.abs(entryAngleOffset); // can only rotate forward
+      aimOffset = entryAngleOffset;
+    }
+  }
   return {
     trickIds,
     q,
-    trickStartDelay: clamp(0.12 + rand() * Math.min(0.5, slack), 0.1, 1.0),
+    headFirst,
+    powers,
+    trickStartDelay: clamp(0.12 + rand() * Math.min(0.35, slack), 0.1, 0.6),
     lockDelta,
-    entryAngleOffset: (rand.chance(0.5) ? 1 : -1) * angleErr,
-    drift: rand.range(-15, 15),
+    entryAngleOffset,
+    aimOffset,
+    aimTarget: null,
     started: false,
     nextIndex: 0,
   };

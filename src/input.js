@@ -1,8 +1,11 @@
 // Pointer + keyboard input.
 //   - press start / end (charging the jump: hold the screen, mouse or Space)
 //   - taps (lock the entry in mid-air)
-//   - swipes: touch drags, or quick mouse / trackpad movement with no button
-//   - modifier for tuck variants: Shift, or a second finger held on the screen
+//   - holds (rotate forward in mid-air): a finger / mouse button held still,
+//     or Shift held on its own
+//   - swipes: touch drags, or quick mouse / trackpad movement with no button,
+//     with a power from their length and speed
+//   - modifier for tuck variants: Shift, or a second finger, during a swipe
 
 import { StrokeBuffer } from './tricks.js';
 
@@ -13,7 +16,9 @@ const HOVER_END_IDLE_MS = 110; // slow time needed to end a hover stroke (corner
 const SWIPE_MAX_MS = 1300;
 const SWIPE_MIN_LEN = 40;
 const PRESS_SWIPE_START = 10; // px a pressed pointer must move to become a swipe
-const TAP_MAX_MS = 350;
+const TAP_MAX_MS = 200;
+const HOLD_DELAY_MS = 200; // a still press longer than a tap becomes a hold
+const SHIFT_HOLD_DELAY_MS = 140; // Shift + a quick flick stays a tuck, not a rotation
 const TAP_MAX_MOVE = 14;
 
 export class InputController {
@@ -29,7 +34,47 @@ export class InputController {
     this.endTimer = null;
     this.spaceDown = false;
     this.buffer = new StrokeBuffer((r) => this.handlers.onSwipe?.(r));
+    this.holdSources = new Set();
+    this.shiftTimer = null;
+    this.shiftSuppressed = false;
+    this.updateRef();
+    window.addEventListener('resize', () => this.updateRef());
     this._bind();
+  }
+
+  updateRef() {
+    // Reference swipe length for power: a fifth of the smaller screen side.
+    this.buffer.refPx = Math.max(80, Math.min(window.innerWidth || 800, window.innerHeight || 600) * 0.2);
+  }
+
+  // ---- holds -----------------------------------------------------------------
+  addHold(src) {
+    const was = this.holdSources.size;
+    this.holdSources.add(src);
+    if (was === 0) this.handlers.onHoldStart?.();
+  }
+
+  removeHold(src) {
+    if (!this.holdSources.delete(src)) return;
+    if (this.holdSources.size === 0) this.handlers.onHoldEnd?.();
+  }
+
+  /** A swipe has started: anything acting as a modifier stops rotating. */
+  suppressHolds(exceptId) {
+    for (const p of this.pointers.values()) {
+      if (p.id === exceptId) continue;
+      clearTimeout(p.holdTimer);
+      p.holdSuppressed = true;
+      if (p.holding) {
+        p.holding = false;
+        this.removeHold(`p${p.id}`);
+      }
+    }
+    if (this.shift) {
+      clearTimeout(this.shiftTimer);
+      this.shiftSuppressed = true;
+      this.removeHold('shift');
+    }
   }
 
   _bind() {
@@ -42,6 +87,8 @@ export class InputController {
     window.addEventListener('keyup', (e) => this.onKey(e, false));
     window.addEventListener('blur', () => {
       this.shift = false;
+      clearTimeout(this.shiftTimer);
+      for (const src of [...this.holdSources]) this.removeHold(src);
       if (this.spaceDown) {
         this.spaceDown = false;
         this.handlers.onPressEnd?.('key');
@@ -71,6 +118,15 @@ export class InputController {
     });
     if (this.swipe) this.swipe.modifier = true;
     else if (!first) this.buffer.setModifier();
+    const ptr = this.pointers.get(e.pointerId);
+    if (this.swipe) ptr.holdSuppressed = true;
+    else {
+      ptr.holdTimer = setTimeout(() => {
+        if (this.pointers.get(ptr.id) !== ptr || ptr.swiped || ptr.holdSuppressed || ptr.moved > TAP_MAX_MOVE || this.swipe) return;
+        ptr.holding = true;
+        this.addHold(`p${ptr.id}`);
+      }, HOLD_DELAY_MS);
+    }
     // A hover swipe in progress is finished by a click.
     if (this.swipe && this.swipe.pointerId == null) this.finishSwipe();
     if (first) this.handlers.onPressStart?.('pointer');
@@ -80,10 +136,12 @@ export class InputController {
     const p = this.pointers.get(e.pointerId);
     if (!p) return;
     this.pointers.delete(e.pointerId);
+    clearTimeout(p.holdTimer);
+    if (p.holding) this.removeHold(`p${p.id}`);
     if (!this.enabled) return;
     if (this.swipe && this.swipe.pointerId === e.pointerId) {
       this.finishSwipe();
-    } else if (!cancelled && !p.multi && !p.swiped) {
+    } else if (!cancelled && !p.multi && !p.swiped && !p.holding) {
       const dt = e.timeStamp - p.t0;
       if (dt <= TAP_MAX_MS && p.moved <= TAP_MAX_MOVE) this.handlers.onTap?.(e);
     }
@@ -92,7 +150,6 @@ export class InputController {
 
   onMove(e) {
     if (!this.enabled) return;
-    if (e.pointerType === 'mouse') this.shift = e.shiftKey;
     const p = this.pointers.get(e.pointerId);
     if (p) {
       this.onPressedMove(e, p);
@@ -106,19 +163,23 @@ export class InputController {
     p.moved = Math.max(p.moved, Math.hypot(e.clientX - p.x0, e.clientY - p.y0));
     p.x = e.clientX;
     p.y = e.clientY;
-    if (!this.swipeEnabled) return;
+    p.lastT = e.timeStamp;
+    if (!this.swipeEnabled || p.holding) return;
     if (this.swipe && this.swipe.pointerId === e.pointerId) {
       this.swipe.pts.push({ x: e.clientX, y: e.clientY });
       this.swipe.len += dist;
+      this.swipe.lastFastT = e.timeStamp;
       if (this.modifierActive) this.swipe.modifier = true;
       return;
     }
     if (!this.swipe && p.moved > PRESS_SWIPE_START) {
       p.swiped = true;
+      clearTimeout(p.holdTimer);
       this.swipe = {
         pointerId: e.pointerId, pts: [{ x: p.x0, y: p.y0 }, { x: e.clientX, y: e.clientY }],
-        len: p.moved, startT: e.timeStamp, modifier: this.modifierActive, idleMs: 0,
+        len: p.moved, startT: p.t0, lastFastT: e.timeStamp, modifier: this.modifierActive, idleMs: 0,
       };
+      this.suppressHolds(e.pointerId);
     }
   }
 
@@ -141,6 +202,7 @@ export class InputController {
           pointerId: null, pts: [{ x: last.x, y: last.y }, { x: pt.x, y: pt.y }],
           len: dist, startT: last.t, lastFastT: now, modifier: this.modifierActive, idleMs: 0,
         };
+        this.suppressHolds(null);
         this.armEndTimer();
       }
       return;
@@ -172,12 +234,10 @@ export class InputController {
     const s = this.swipe;
     this.swipe = null;
     if (!s || s.len < SWIPE_MIN_LEN) return;
-    if (s.pointerId == null) {
-      // Ignore the slow tail when judging how fast a hover stroke was.
-      const activeMs = Math.max(1, (s.lastFastT ?? s.startT) - s.startT);
-      if (s.len / activeMs < HOVER_MIN_AVG_SPEED) return;
-    }
-    this.buffer.push(s.pts, s.modifier || this.modifierActive);
+    // Ignore the slow tail when judging how fast a stroke was.
+    const activeMs = Math.max(1, (s.lastFastT ?? s.startT) - s.startT);
+    if (s.pointerId == null && s.len / activeMs < HOVER_MIN_AVG_SPEED) return;
+    this.buffer.push(s.pts, s.modifier || this.modifierActive, { len: s.len, ms: activeMs, pressed: s.pointerId != null });
   }
 
   resetGestures() {
@@ -187,7 +247,21 @@ export class InputController {
 
   // ---- keyboard ------------------------------------------------------------
   onKey(e, down) {
-    if (e.key === 'Shift') this.shift = down;
+    if (e.key === 'Shift') {
+      if (down && !this.shift) {
+        this.shift = true;
+        this.shiftSuppressed = !!this.swipe;
+        clearTimeout(this.shiftTimer);
+        this.shiftTimer = setTimeout(() => {
+          if (this.shift && !this.shiftSuppressed && !this.swipe) this.addHold('shift');
+        }, SHIFT_HOLD_DELAY_MS);
+      } else if (!down) {
+        this.shift = false;
+        this.shiftSuppressed = false;
+        clearTimeout(this.shiftTimer);
+        this.removeHold('shift');
+      }
+    }
     if (!this.enabled) return;
     if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
     if (e.code === 'Space' || e.code === 'Enter') {
@@ -215,7 +289,8 @@ export class InputController {
     };
     if (map[e.code]) {
       e.preventDefault();
-      this.handlers.onSwipe?.({ trick: map[e.code], dirs: ['key'], compound: false });
+      this.suppressHolds(null);
+      this.handlers.onSwipe?.({ trick: map[e.code], dirs: ['key'], compound: false, power: 1 });
     }
   }
 }

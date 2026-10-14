@@ -7,9 +7,9 @@ import { TRICKS, sequenceDuration } from '../src/tricks.js';
 
 test('a perfect dive stays below the bot ceiling', () => {
   const rand = mulberry32(1);
-  const q = entryQuality({ angleErrDeg: 0, lockDelta: LOCK_SWEET });
+  const q = entryQuality({ angleErrDeg: 0, lockDelta: LOCK_SWEET, headFirst: true });
   assert.equal(q, 1);
-  const ids = ['barani', 'gainer', 'barani', 'gainer', 'barani'];
+  const ids = ['rudy', 'gainerfull', 'doubleback', 'backtwister', 'rudy'];
   const j = judgeDive({ trickIds: ids, q, rand });
   assert.ok(j.total <= 3 * JUDGE_MAX + 1e-9);
   assert.ok(j.total < MAX_SCORE - 0.03, `player max ${j.total} leaves room for bots`);
@@ -22,7 +22,12 @@ test('entry quality rewards straight, well-timed entries', () => {
   const flop = entryQuality({ angleErrDeg: 90, lockDelta: null });
   assert.ok(perfect > crooked && crooked > flop);
   assert.ok(perfect > noLock && noLock > flop);
-  assert.equal(flop, 0.25 * 0.45);
+  assert.ok(Math.abs(flop - 0.25 * 0.38) < 1e-9);
+  const rip = entryQuality({ angleErrDeg: 0, lockDelta: LOCK_SWEET, headFirst: true });
+  const crookedHeadFirst = entryQuality({ angleErrDeg: 45, lockDelta: LOCK_SWEET, headFirst: true });
+  assert.equal(rip, 1);
+  assert.ok(Math.abs(perfect - 0.88) < 1e-9, 'feet-first tops out below a head-first rip');
+  assert.ok(crookedHeadFirst - crooked < 0.04, 'the head-first bonus needs a straight body');
 });
 
 test('more difficult sequences score more at equal entry', () => {

@@ -36,17 +36,26 @@ function clamp(x, lo, hi) {
  * angleErrDeg: degrees away from vertical at the moment of impact (0 = perfect).
  * lockDelta: seconds before impact when the player locked in, or null.
  * lockedEarly: true when the lock happened before the lock window opened.
+ * headFirst: the head (and arms) entered first.
  */
 export const LOCK_WINDOW = 0.5; // seconds before impact in which a lock counts
 export const LOCK_SWEET = 0.17; // ideal lock time before impact
 export const LOCK_TOLERANCE = 0.33;
 
-export function entryQuality({ angleErrDeg, lockDelta, lockedEarly = false }) {
+// Entry quality weights: straightness, streamline timing, and a bonus for a
+// head-first (hands-first) entry, which splashes less than feet-first.
+export const ANGLE_WEIGHT = 0.5;
+export const TIMING_WEIGHT = 0.38;
+export const HEAD_FIRST_BONUS = 0.12;
+
+export function entryQuality({ angleErrDeg, lockDelta, lockedEarly = false, headFirst = false }) {
   const angleQ = clamp(1 - angleErrDeg / 60, 0, 1);
   let timingQ;
   if (lockDelta == null) timingQ = lockedEarly ? 0.35 : 0.25;
   else timingQ = clamp(1 - Math.abs(lockDelta - LOCK_SWEET) / LOCK_TOLERANCE, 0, 1);
-  return clamp(0.55 * angleQ + 0.45 * timingQ, 0, 1);
+  // The head-first bonus scales with straightness: a crooked head-first entry is no rip.
+  const hf = headFirst ? HEAD_FIRST_BONUS * angleQ : 0;
+  return clamp(ANGLE_WEIGHT * angleQ + TIMING_WEIGHT * timingQ + hf, 0, 1);
 }
 
 /**
@@ -98,7 +107,7 @@ export function synthesizeBotDive({ targetTotal, airTime, rand }) {
     for (let t = 0; t < tries; t++) {
       const ids = [];
       for (let i = 0; i < n; i++) ids.push(rand.pick(TRICK_LIST).id);
-      if (sequenceDuration(ids) > airTime - 0.5) continue;
+      if (sequenceDuration(ids) > airTime - 0.9) continue; // leave time to start, settle the spin and streamline
       const D = sequenceDifficulty(ids);
       const q = (perJudge - JUDGE_BASE - difficultyTerm(D)) / JUDGE_ENTRY_WEIGHT;
       candidates.push({ ids, D, q });

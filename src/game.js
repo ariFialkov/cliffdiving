@@ -5,7 +5,7 @@ import { COMPETITIONS, drawPosition, oddsFor, placeBotScores, rankScores } from 
 import { mulberry32, secureSeed, seedToId } from './rng.js';
 import { TRICKS, sequenceDifficulty } from './tricks.js';
 import { entryQuality, judgeDive, synthesizeBotDive, LOCK_WINDOW, LOCK_SWEET } from './scoring.js';
-import { Diver, World, makeBotPlan } from './world.js';
+import { Diver, World, makeBotPlan, entryTilt } from './world.js';
 import { HAIR_STYLES, PLAYER_HAIR } from './rig.js';
 
 const BOT_POOL = [
@@ -74,6 +74,8 @@ export class Game {
     this.input.handlers.onSwipe = (r) => this.onSwipe(r);
     this.input.handlers.onPressStart = (src) => this.onPressStart(src);
     this.input.handlers.onPressEnd = (src) => this.onPressEnd(src);
+    this.input.handlers.onHoldStart = () => this.onHold(true);
+    this.input.handlers.onHoldEnd = () => this.onHold(false);
   }
 
   // ---- persistence ----------------------------------------------------------
@@ -307,15 +309,41 @@ export class Game {
     this.ui.setLockMeter(null);
   }
 
+  onHold(on) {
+    const p = this.player;
+    if (!p) return;
+    if (!on) {
+      p.holding = false;
+      return;
+    }
+    if (this.state !== 'playerAir' || p.state !== 'airborne') return;
+    p.holding = true;
+    if (!this.holdHintShown) {
+      this.holdHintShown = true;
+      this.ui.feed('Rotating… let go when you\'re lined up', 'hint');
+    }
+  }
+
   onSwipe(r) {
     if (this.state !== 'playerAir' || !r?.trick) return;
-    const trick = TRICKS[r.trick];
     const p = this.player;
     const timeLeft = p.state === 'airborne' ? p.impactT - p.airT : this.world.airTimeFor(p.jumpCharge);
-    const queuedDur = p.current ? p.current.trick.duration - p.current.t : 0;
-    if (!p.queueTrick(trick.id)) return;
-    const fits = timeLeft - queuedDur >= trick.duration + 0.05;
-    this.ui.feed(`${trick.name}  +${trick.difficulty.toFixed(1)}${fits ? '' : '  (too late!)'}`, fits ? 'trick' : 'warn');
+    const busy = p.current ? p.current.T - p.current.t : 0;
+    const power = r.power ?? 1;
+    const status = p.queueTrick(r.trick, power);
+    if (!status) return;
+    const pct = `${Math.round(power * 100)}%`;
+    if (status === 'combo') {
+      const combo = p.current?.trick ?? TRICKS[p.queue[0]?.id];
+      const left = p.current ? p.current.T - p.current.t : combo.duration;
+      const fits = timeLeft >= left + 0.05;
+      this.ui.feed(`COMBO! ${combo.name}  +${combo.difficulty.toFixed(1)}${fits ? '' : '  (too late!)'}`, fits ? 'great' : 'warn');
+      return;
+    }
+    const trick = TRICKS[r.trick];
+    const fits = timeLeft - busy >= trick.duration + 0.05;
+    const flips = trick.flip !== 0 && r.dirs?.[0] !== 'key';
+    this.ui.feed(`${trick.name}  +${trick.difficulty.toFixed(1)}${flips ? `  · ${pct}` : ''}${fits ? '' : '  (too late!)'}`, fits ? 'trick' : 'warn');
   }
 
   releaseJump() {
@@ -327,7 +355,7 @@ export class Game {
     this.input.swipeEnabled = true;
     const c = this.player.charge;
     if (c >= 0.97) this.ui.feed('Full power!', 'great');
-    this.ui.feed('Swipe to trick · tap to lock entry', 'hint');
+    this.ui.feed('Swipe = trick · hold = rotate · tap = streamline', 'hint');
   }
 
   onDiverEvent(type, data, diver) {
@@ -341,7 +369,7 @@ export class Game {
     this.cameraHold = { x: diver.x + 0.6, y: this.world.height - 1.2 };
     let judged;
     if (diver.isPlayer) {
-      const q = entryQuality({ angleErrDeg: data.angleErrDeg, lockDelta: data.lockDelta, lockedEarly: data.lockedEarly });
+      const q = entryQuality({ angleErrDeg: data.angleErrDeg, lockDelta: data.lockDelta, lockedEarly: data.lockedEarly, headFirst: data.headFirst });
       judged = judgeDive({ trickIds: data.completed, q, rand: r.rand });
       diver.result = judged;
       this.world.addSplash(diver.x, 1 - q);
@@ -349,9 +377,15 @@ export class Game {
       this.input.swipeEnabled = false;
       this.ui.setLockMeter(null);
       this.state = 'playerScore';
+      const err = data.angleErrDeg;
+      // Which way were we off? Measured from the nearest vertical line, forward = over-rotated.
+      const off = ((diver.angle % 180) + 180) % 180;
+      const way = off < 90 ? 'over-rotated' : 'under-rotated';
       if (data.midTrick) this.ui.feed('Hit the water mid-trick!', 'warn');
-      else if (q > 0.85) this.ui.feed('Clean entry!', 'great');
-      else if (q < 0.35) this.ui.feed('Big splash…', 'warn');
+      else if (data.headFirst && err < 8) this.ui.feed('Rip entry! Head-first', 'great');
+      else if (err < 8) this.ui.feed('Clean entry!', 'great');
+      else if (err >= 25) this.ui.feed(`Big splash… ${Math.round(err)}° ${way}`, 'warn');
+      else this.ui.feed(`${Math.round(err)}° ${way}`, 'good');
       this.after(0.9, () => this.ui.showJudges('Your dive', judged.marks, judged.total));
       this.after(2.8, () => {
         this.ui.hideJudges();
@@ -501,10 +535,12 @@ export class Game {
         this.releaseJump();
       }
     }
+    if (!(this.player && this.player.state === 'airborne')) this.ui.setAngleGauge(null);
     // Camera follows whoever is in the air.
     const flier = w.divers.find((d) => d.state === 'airborne' || d.state === 'entering');
     if (flier) {
       cam.follow(flier.x + 0.6, flier.y + (flier.state === 'airborne' ? 2.2 : 0.8));
+      if (flier.isPlayer && flier.state === 'airborne') this.ui.setAngleGauge(flier.angle, entryTilt(flier.angle, flier.roll));
       if (flier.isPlayer && flier.state === 'airborne' && !flier.locked) {
         const left = flier.impactT - flier.airT;
         this.ui.setLockMeter(left <= LOCK_WINDOW + 0.4 ? clamp(1 - left / (LOCK_WINDOW + 0.4), 0, 1) : null);

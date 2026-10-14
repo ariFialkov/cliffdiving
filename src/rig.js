@@ -54,9 +54,10 @@ export const POSES = {
   pike: { spine1: 142, spine2: 116, head: 96, armFu: 150, armFf: 166, armBu: 146, armBf: 162, legFu: 164, legFf: 166, legBu: 160, legBf: 162, footF: 12, footB: 12 },
   layout: { spine1: 190, spine2: 196, head: 200, armFu: 196, armFf: 204, armBu: 192, armBf: 200, legFu: -6, legFf: -8, legBu: -10, legBf: -12, footF: 6, footB: 6 },
   straight: { spine1: 178, spine2: 174, head: 168, armFu: 135, armFf: 140, armBu: 128, armBf: 134, legFu: 4, legFf: 4, legBu: 2, legBf: 2, footF: 6, footB: 6 },
-  gainer: { spine1: 194, spine2: 202, head: 210, armFu: 215, armFf: 225, armBu: 205, armBf: 215, legFu: -22, legFf: -62, legBu: -12, legBf: -48, footF: -40, footB: -30 },
+  gainer: { spine1: 194, spine2: 202, head: 210, armFu: 228, armFf: 246, armBu: 168, armBf: 196, legFu: -52, legFf: -104, legBu: 16, legBf: -14, footF: -110, footB: -20 },
   twist: { spine1: 180, spine2: 182, head: 182, armFu: 150, armFf: 160, armBu: 146, armBf: 156, legFu: 3, legFf: 0, legBu: -3, legBf: -2, footF: 6, footB: 6 },
   lock: { spine1: 180, spine2: 180, head: 180, armFu: 180, armFf: 180, armBu: 180, armBf: 180, legFu: 1, legFf: 0, legBu: -1, legBf: 0, footF: 6, footB: 6 },
+  dive: { spine1: 180, spine2: 181, head: 182, armFu: 182, armFf: 182, armBu: 178, armBf: 178, legFu: 1, legFf: 0, legBu: -1, legBf: 0, footF: 4, footB: 4 },
   limp: { spine1: 176, spine2: 168, head: 160, armFu: 150, armFf: 120, armBu: 160, armBf: 130, legFu: 12, legFf: -20, legBu: -8, legBf: -14, footF: 40, footB: 40 },
   swim: { spine1: 182, spine2: 184, head: 168, armFu: 180, armFf: 190, armBu: 0, armBf: 10, legFu: 6, legFf: -4, legBu: -6, legBf: -14, footF: 0, footB: -8 },
   hipsHands: { spine1: 180, spine2: 180, head: 180, armFu: -40, armFf: 60, armBu: -36, armBf: 56, legFu: 2, legFf: 0, legBu: -2, legBf: 0, footF: 90, footB: 90 },
@@ -279,7 +280,7 @@ export class Rig {
       case 'airborne': {
         pose = this.airPose(d);
         stiff = d.current ? 24 : d.locked ? 26 : 12;
-        if (d.current && d.current.trick.shape === 'gainer') legMul = 0.45; // legs dangle and trail
+        if (d.current && d.current.trick.shape === 'gainer') legMul = 0.4; // legs dangle and trail
         break;
       }
       case 'entering': {
@@ -308,10 +309,10 @@ export class Rig {
   spreadFor(d) {
     if (d.state !== 'airborne') return d.state === 'launch' ? 0.2 : 0;
     if (d.current) {
-      const p = clamp(d.current.t / d.current.trick.duration, 0, 1);
+      const p = clamp(d.current.t / (d.current.T ?? d.current.trick.duration), 0, 1);
       return (SPREAD[d.current.trick.shape] ?? 0.2) * Math.sin(Math.PI * p) ** 0.5;
     }
-    return d.locked ? 0 : SPREAD.fall;
+    return d.locked || d.holding || d.holdOmega > 20 ? 0 : SPREAD.fall;
   }
 
   /** Front crawl, in a body frame where the head leads along +x (body pitched 90°). */
@@ -342,11 +343,12 @@ export class Rig {
   airPose(d) {
     if (d.current) {
       const c = d.current;
-      const p = clamp(c.t / c.trick.duration, 0, 1);
+      const p = clamp(c.t / (c.T ?? c.trick.duration), 0, 1);
       const fold = Math.sin(Math.PI * p) ** 0.8;
       const shape = P[SHAPE_POSE[c.trick.shape]] ?? P.tuck;
       return blend(P.fall, shape, fold);
     }
+    if (d.holding || d.holdOmega > 20) return { ...P.dive }; // straight dive position while rotating
     if (d.locked) {
       const left = d.impactT - d.airT;
       const k = clamp((0.5 - left) / 0.35, 0, 1);

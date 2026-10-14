@@ -101,3 +101,24 @@ test('StrokeBuffer picks up a second finger that lands just after the stroke', (
     mock.timers.reset();
   }
 });
+
+test('touch strokes never merge: lifting the finger makes two separate tricks (combo material)', () => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    const out = [];
+    const buf = new StrokeBuffer((r) => out.push(r.trick), { windowMs: 90 });
+    buf.push(line(100, 100, 100, 260), false, { pressed: true });
+    buf.push(line(100, 262, 260, 262), false, { pressed: true });
+    assert.deepEqual(out, ['frontflip', 'corkscrew']);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('emitted swipes carry a power from their length and speed', () => {
+  const out = [];
+  const buf = new StrokeBuffer((r) => out.push(r), { refPx: 160 });
+  buf.push(line(100, 100, 300, 100), false, { len: 200, ms: 60, pressed: true });
+  buf.push(line(100, 100, 160, 100), false, { len: 60, ms: 120, pressed: true });
+  assert.ok(out[0].power > 1.05 && out[1].power < 0.9, `${out[0].power} ${out[1].power}`);
+});

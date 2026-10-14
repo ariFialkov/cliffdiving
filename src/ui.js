@@ -1,7 +1,7 @@
 // DOM overlay: lobby, HUD, judges, results, tutorial, toasts.
 
 import { COMPETITIONS, oddsFor } from './odds.js';
-import { TRICK_LIST } from './tricks.js';
+import { BASE_TRICKS, COMBO_TRICKS } from './tricks.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -50,6 +50,8 @@ export class UI {
       toasts: $('#toasts'),
       lockMeter: $('#lock-meter'),
       chargeMeter: $('#charge-meter'),
+      angleGauge: $('#angle-gauge'),
+      angleBody: $('#angle-gauge .body'),
       chargeFill: $('#charge-meter .fill'),
       lockFill: $('#lock-meter .fill'),
       roundId: $('#round-id'),
@@ -82,11 +84,11 @@ export class UI {
   }
 
   renderGestureLists() {
-    const html = TRICK_LIST.map(
-      (t) => `<li><span class="arrow">${t.arrow}</span><span class="tname">${t.name}</span><span class="tdiff">${t.difficulty.toFixed(1)}</span><span class="tges">${t.gesture}</span></li>`,
-    ).join('');
-    this.el.gestureList.innerHTML = html;
-    this.el.tutorialGestures.innerHTML = html;
+    const row = (t) => `<li class="${t.combo ? 'combo' : ''}"><span class="arrow">${t.arrow}</span><span class="tname">${t.name}</span><span class="tdiff">${t.difficulty.toFixed(1)}</span><span class="tges">${t.gesture}</span></li>`;
+    const base = BASE_TRICKS.map(row).join('');
+    const combos = `<li class="list-head">Combos: fire the 2nd trick right after the 1st</li>${COMBO_TRICKS.map(row).join('')}`;
+    this.el.gestureList.innerHTML = base + combos;
+    this.el.tutorialGestures.innerHTML = base + combos;
   }
 
   // ---- top bar ------------------------------------------------------------
@@ -187,6 +189,19 @@ export class UI {
     }
     m.classList.remove('hidden');
     this.el.lockFill.style.height = `${Math.round(fraction * 100)}%`;
+  }
+
+  /** Body-angle gauge: a little stick showing which way the diver points (head = dot). */
+  setAngleGauge(pitchDeg, tiltDeg) {
+    const g = this.el.angleGauge;
+    if (pitchDeg == null) {
+      if (!g.classList.contains('hidden')) g.classList.add('hidden');
+      return;
+    }
+    g.classList.remove('hidden');
+    this.el.angleBody.setAttribute('transform', `rotate(${pitchDeg.toFixed(1)})`);
+    g.classList.toggle('ok', tiltDeg < 8);
+    g.classList.toggle('near', tiltDeg >= 8 && tiltDeg < 25);
   }
 
   setChargeMeter(fraction) {

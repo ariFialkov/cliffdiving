@@ -49,8 +49,61 @@ export const TRICKS = {
   },
 };
 
+// Combination tricks: fire the second trick right after the first (while the
+// first is still early) and the two merge into one bigger, higher-scoring trick.
+const COMBO_DEFS = [
+  { id: 'fronttwister', name: 'Front Twister', parts: ['frontflip', 'corkscrew'], difficulty: 3.2, duration: 0.98, flip: 1, twist: 1, roll: 0, shape: 'straight' },
+  { id: 'backtwister', name: 'Back Twister', parts: ['backflip', 'corkscrew'], difficulty: 3.4, duration: 1.0, flip: -1, twist: 1, roll: 0, shape: 'layout' },
+  { id: 'doublefront', name: 'Double Front', parts: ['fronttuck', 'fronttuck'], difficulty: 2.9, duration: 1.02, flip: 2, twist: 0, roll: 0, shape: 'tuck' },
+  { id: 'doubleback', name: 'Double Back', parts: ['backtuck', 'backtuck'], difficulty: 3.2, duration: 1.08, flip: -2, twist: 0, roll: 0, shape: 'tuck' },
+  { id: 'gainerfull', name: 'Gainer Full', parts: ['gainer', 'corkscrew'], difficulty: 3.6, duration: 1.04, flip: -1, twist: 1, roll: 0, shape: 'gainer' },
+  { id: 'rudy', name: 'Rudy', parts: ['barani', 'corkscrew'], difficulty: 3.8, duration: 1.04, flip: 1, twist: 1.5, roll: 0, shape: 'straight' },
+  { id: 'doublecork', name: 'Double Corkscrew', parts: ['corkscrew', 'corkscrew'], difficulty: 2.8, duration: 0.96, flip: 0, twist: 2, roll: 0, shape: 'twist' },
+];
+for (const c of COMBO_DEFS) {
+  const [a, b] = c.parts.map((p) => TRICKS[p]);
+  TRICKS[c.id] = {
+    ...c, combo: true,
+    gesture: a.id === b.id ? `${a.name} twice, quickly` : `${a.name} then ${b.name}, quickly (either order)`,
+    arrow: a.id === b.id ? `${a.arrow}${a.arrow}` : `${a.arrow}+${b.arrow}`,
+  };
+}
+
 export const TRICK_LIST = Object.values(TRICKS);
+export const BASE_TRICKS = TRICK_LIST.filter((t) => !t.combo);
+export const COMBO_TRICKS = TRICK_LIST.filter((t) => t.combo);
 export const COMPOUND_TRICKS = new Set(['jackknife', 'barani', 'gainer']);
+
+const COMBO_BY_PAIR = new Map();
+for (const c of COMBO_TRICKS) {
+  COMBO_BY_PAIR.set(`${c.parts[0]}+${c.parts[1]}`, c.id);
+  COMBO_BY_PAIR.set(`${c.parts[1]}+${c.parts[0]}`, c.id);
+}
+
+/** The combination trick formed by `first` followed quickly by `second`, or null. */
+export function comboFor(first, second) {
+  return COMBO_BY_PAIR.get(`${first}+${second}`) ?? null;
+}
+
+/**
+ * Swipe power from stroke length and speed: ~1.0 for an ordinary, confident
+ * swipe; short/slow swipes under-rotate, long/fast ones over-rotate.
+ * lenPx: stroke length; ms: active stroke time; refPx: a reference length
+ * (about a fifth of the smaller screen dimension).
+ */
+export const POWER_MIN = 0.72;
+export const POWER_MAX = 1.28;
+export function swipePower(lenPx, ms, refPx) {
+  if (!(lenPx > 0) || !(ms > 0) || !(refPx > 0)) return 1;
+  const lenN = lenPx / refPx;
+  const speedN = lenPx / ms / 1.6;
+  const x = 0.6 * (lenN - 1) + 0.4 * (speedN - 1);
+  return clamp(1 + 0.28 * Math.tanh(x), POWER_MIN, POWER_MAX);
+}
+
+function clamp(x, lo, hi) {
+  return Math.min(hi, Math.max(lo, x));
+}
 
 /** Difficulty of a sequence; later tricks are worth a little more (combo). */
 export function sequenceDifficulty(trickIds) {
@@ -177,42 +230,55 @@ function mayStartCompound(result) {
 }
 
 /**
- * Buffers finished strokes for a short window so that two separate strokes
- * (e.g. a ✓ drawn with a pause or lift at the corner) still combine into a
- * compound trick. Straight-through compound strokes emit immediately.
+ * Buffers finished hover strokes for a very short window so that a mouse ✓
+ * or L with a brief stall at the corner still counts as one gesture. Two
+ * strokes separated by a real gap (or any touch strokes, where lifting the
+ * finger ends a stroke on purpose) stay separate, which is what makes
+ * quick-fire combos (e.g. front flip then corkscrew) possible.
  */
 export class StrokeBuffer {
-  constructor(emit, { windowMs = 170, setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (id) => clearTimeout(id) } = {}) {
+  constructor(emit, { windowMs = 90, refPx = 160, setTimer = (fn, ms) => setTimeout(fn, ms), clearTimer = (id) => clearTimeout(id) } = {}) {
     this.emit = emit;
     this.windowMs = windowMs;
+    this.refPx = refPx;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
     this.pending = null;
   }
 
-  push(points, modifier = false) {
+  out(result, len, ms) {
+    if (!result) return;
+    this.emit({ ...result, power: swipePower(len, ms, this.refPx) });
+  }
+
+  /** meta: { len, ms, pressed } */
+  push(points, modifier = false, meta = {}) {
+    const len = meta.len ?? pathLength(points);
+    const ms = meta.ms ?? 120;
     if (this.pending) {
       const p = this.pending;
       this.clearTimer(p.timer);
       this.pending = null;
-      const merged = classifySwipe([...p.points, ...points], { modifier: p.modifier || modifier });
-      if (merged && merged.compound) {
-        this.emit(merged);
-        return;
+      if (!meta.pressed) {
+        const merged = classifySwipe([...p.points, ...points], { modifier: p.modifier || modifier });
+        if (merged && merged.compound) {
+          this.out(merged, p.len + len, p.ms + ms);
+          return;
+        }
       }
-      this.emit(p.result);
+      this.out(p.result, p.len, p.ms);
     }
     const result = classifySwipe(points, { modifier });
     if (!result) return;
-    if (mayStartCompound(result)) {
+    if (!meta.pressed && mayStartCompound(result)) {
       const timer = this.setTimer(() => this.flush(), this.windowMs);
-      this.pending = { points, modifier, result, timer };
+      this.pending = { points, modifier, result, timer, len, ms };
     } else {
-      this.emit(result);
+      this.out(result, len, ms);
     }
   }
 
-  /** Upgrade a pending stroke's modifier (e.g. 2nd finger lands just after). */
+  /** Upgrade a pending stroke's modifier (e.g. Shift pressed just after). */
   setModifier() {
     if (!this.pending || this.pending.modifier) return;
     this.pending.modifier = true;
@@ -224,11 +290,17 @@ export class StrokeBuffer {
     const p = this.pending;
     this.clearTimer(p.timer);
     this.pending = null;
-    this.emit(p.result);
+    this.out(p.result, p.len, p.ms);
   }
 
   cancel() {
     if (this.pending) this.clearTimer(this.pending.timer);
     this.pending = null;
   }
+}
+
+export function pathLength(points) {
+  let len = 0;
+  for (let i = 1; i < points.length; i++) len += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  return len;
 }
