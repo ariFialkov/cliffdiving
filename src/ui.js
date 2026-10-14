@@ -2,6 +2,8 @@
 
 import { COMPETITIONS, oddsFor } from './odds.js';
 import { BASE_TRICKS, COMBO_TRICKS } from './tricks.js';
+import { THEMES } from './themes.js';
+import { logoDataURL } from './logos.js';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -111,7 +113,8 @@ export class UI {
       const top = odds.multipliers[0];
       const cls = ['comp-card', locked ? 'locked' : '', i === selected ? 'selected' : ''].join(' ');
       return `<button class="${cls}" data-index="${i}" data-tier="${i}" ${locked ? 'disabled' : ''} aria-pressed="${i === selected}">
-        <span class="comp-height">${c.height}m</span>
+        <img class="comp-logo" src="${logoDataURL(c.id, 360)}" alt="" />
+        <span class="comp-height">${c.height}m <small>${THEMES[c.id]?.place ?? ''}</small></span>
         <span class="comp-name">${c.name}</span>
         <span class="comp-top">Top prize <b>${top}x</b></span>
         ${locked ? `<span class="comp-lock">🔒 Win a round in ${COMPETITIONS[i - 1].short} to unlock</span>` : `<span class="comp-blurb">${c.blurb}</span>`}
@@ -291,7 +294,7 @@ export class UI {
     const titles = ['You won!', 'Second place', 'Third place', 'Fourth place'];
     const medalCls = ['m1', 'm2', 'm3', ''][playerRank - 1];
     this.el.resultsTitle.innerHTML = `${medalCls ? `<span class="medal-big rank medal ${medalCls}">${playerRank}</span>` : ''}<span>${titles[playerRank - 1]}</span>`;
-    this.el.resultsSub.textContent = `${ordinal} in the ${comp.name}`;
+    this.el.resultsSub.textContent = `${ordinal} in the ${comp.name} · ${THEMES[comp.id]?.place ?? ''}`;
     this.el.resultsTable.innerHTML = standings
       .map(
         (s) => `<li class="${s.isPlayer ? 'me' : ''}">

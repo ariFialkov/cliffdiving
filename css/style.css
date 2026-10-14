@@ -226,7 +226,10 @@ button { font: inherit; color: inherit; cursor: pointer; font-weight: 600; }
 .comp-card.locked { cursor: not-allowed; background: var(--paper-2); color: var(--ink-faint); box-shadow: 2px 3px 0 var(--ink-faint); border-color: var(--ink-faint); }
 .comp-card.locked::before { opacity: 0.35; }
 .comp-card.locked .comp-height { color: var(--ink-faint); }
-.comp-height { font-weight: 700; font-size: 26px; color: var(--sea); margin-top: 4px; line-height: 1; }
+.comp-logo { width: 100%; height: auto; display: block; margin: 6px 0 2px; filter: drop-shadow(1px 2px 0 rgba(27,29,42,0.25)); }
+.comp-card.locked .comp-logo { filter: grayscale(1) opacity(0.45); }
+.comp-height { font-weight: 700; font-size: 22px; color: var(--sea); margin-top: 2px; line-height: 1.1; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.comp-height small { font-size: 10.5px; font-weight: 600; color: var(--ink-soft); }
 .comp-name { font-weight: 700; font-size: 14px; line-height: 1.2; }
 .comp-top { font-size: 12px; color: var(--ink-soft); font-weight: 600; }
 .comp-top b { color: var(--coral-deep); font-weight: 700; }

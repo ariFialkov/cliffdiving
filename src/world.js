@@ -4,6 +4,7 @@
 import { TRICKS, comboFor } from './tricks.js';
 import { LOCK_WINDOW, LOCK_SWEET, LOCK_TOLERANCE, HEAD_FIRST_BONUS, ANGLE_WEIGHT, TIMING_WEIGHT } from './scoring.js';
 import { Rig, STANDING_HIP_HEIGHT } from './rig.js';
+import { themeFor } from './themes.js';
 
 export const HIP_HEIGHT = STANDING_HIP_HEIGHT; // hip above the cliff top when standing
 export const IMPACT_OFFSET = 0.45; // hip is this far above the surface at impact
@@ -607,9 +608,12 @@ export class World {
     this.gravity = 9.81;
     this.time = 0;
     this.rand = Math.random;
+    this.theme = themeFor(null);
   }
 
   setCompetition(comp) {
+    this.comp = comp;
+    this.theme = themeFor(comp);
     this.height = comp.height;
     // Choose gravity so a plain drop takes roughly comp.airTime seconds.
     const drop = comp.height - IMPACT_OFFSET + HIP_HEIGHT;

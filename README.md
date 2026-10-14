@@ -109,6 +109,19 @@ Position probabilities are derived from the multipliers so every competition ret
 **96% RTP**: `p_i ∝ exp(−λ·m_i)`, with λ solved by bisection (`src/odds.js`). The tests assert
 this for every competition.
 
+## Venues
+
+Each competition has its own venue (`src/themes.js`) and a hand-drawn logo (`src/logos.js`)
+shown on a banner at the cliff top, on something floating in the landing zone, and on the
+lobby cards:
+
+| Competition | Venue | Rock / water | Logo |
+| --- | --- | --- | --- |
+| Little Tykes | Lake Muskoka, Ontario | Brown rock, pines, deep blue lake, snowy peaks | Kids'-club cloud badge, rainbow letters, bunting |
+| The Bluffs | Scarborough Bluffs, Lake Ontario | Pale sand-and-silt strata with gullies, warm light-blue lake | Club crest patch, cloth banner, marker buoy |
+| Superdive Classic | Redwall Gorge, Arizona | Orange-red limestone ledges, scrub, turquoise shallows, mesas | Navy shield with laurels, pleated banner, floating platform |
+| Blue Horse World Series | Kaʻanapali Point, Maui | Black basalt columns, palms, bright ocean, volcanic island | Sponsor plate with horse-head emblem, rigid board, pontoon with flags |
+
 ## Layout
 
 ```
