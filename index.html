@@ -22,13 +22,13 @@
     <!-- HUD (non-interactive except where marked .ui) -->
     <div id="hud">
       <div class="topbar">
-        <div class="brand">🌊 <span class="word">Cliffdiving</span></div>
+        <div class="brand"><span class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="20" cy="7" r="4.2" fill="#fff" stroke="#1b1d2a" stroke-width="2.2"/><path d="M17 4.5 q-3 -4 1 -4.5 q-1 2 3 2.5" fill="#1b1d2a"/><path d="M18 11 L 12 19 L 6 24 M12 19 L 14 27" fill="none" stroke="#1b1d2a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M15 15 L 24 16 M15 15 L 9 12" fill="none" stroke="#1b1d2a" stroke-width="2.6" stroke-linecap="round"/><path d="M12 19 l 2 1.5" stroke="#ff6b57" stroke-width="3.6" stroke-linecap="round"/><path d="M3 29 q 4 -3 8 0 t 8 0 t 8 0" fill="none" stroke="#1f78c9" stroke-width="2.4" stroke-linecap="round"/></svg></span><span class="word outline-text">Cliffdiving</span></div>
         <div id="comp-pill" class="pill">Little Tykes · 10m</div>
-        <div class="balance-wrap"><span class="coin">●</span><span id="balance">1,000.00</span></div>
+        <div class="balance-wrap"><span class="coin"></span><span id="balance">1,000.00</span></div>
       </div>
       <ol id="leaderboard" class="leaderboard hidden"></ol>
       <div id="trick-feed" class="feed"></div>
-      <div id="prompt" class="prompt hidden">Tap to dive</div>
+      <div id="prompt" class="prompt outline-text hidden">Tap to dive</div>
       <svg id="dive-clock" class="clock hidden" viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
         <circle class="bg" cx="32" cy="32" r="26" />
         <circle class="fg" cx="32" cy="32" r="26" transform="rotate(-90 32 32)" />
@@ -36,7 +36,7 @@
       </svg>
       <div id="charge-meter" class="charge-meter hidden" aria-hidden="true">
         <div class="track"><div class="fill"></div></div>
-        <div class="label">POWER</div>
+        <div class="label outline-text">POWER</div>
       </div>
       <svg id="angle-gauge" class="angle-gauge hidden" viewBox="-40 -40 80 80" width="72" height="72" aria-hidden="true">
         <circle class="ring" r="34" />
@@ -46,7 +46,7 @@
       </svg>
       <div id="lock-meter" class="lock-meter hidden" aria-hidden="true">
         <div class="track"><div class="sweet"></div><div class="fill"></div></div>
-        <div class="label">TAP TO<br>STREAMLINE</div>
+        <div class="label outline-text">TAP TO<br>STREAMLINE</div>
       </div>
       <button id="help-btn" class="ui help" aria-label="How to play">?</button>
       <div id="toasts" class="toasts"></div>
@@ -65,13 +65,14 @@
 
     <!-- Lobby -->
     <section id="lobby" class="panel ui lobby" aria-label="Round setup">
+      <div class="inner">
       <h2>Pick your competition</h2>
       <div id="comp-list" class="comp-list"></div>
       <div class="stake-row">
         <h3>Stake</h3>
         <div class="stake-controls">
           <button id="stake-dec" class="round-btn" aria-label="Lower stake">−</button>
-          <div class="stake-value"><span class="coin">●</span><span id="stake-value">1.00</span></div>
+          <div class="stake-value"><span class="coin"></span><span id="stake-value">1.00</span></div>
           <button id="stake-inc" class="round-btn" aria-label="Raise stake">+</button>
         </div>
         <div id="stake-chips" class="chips"></div>
@@ -83,10 +84,13 @@
         <summary>Trick cheat-sheet</summary>
         <ul id="gesture-list" class="gesture-list"></ul>
       </details>
+      </div>
     </section>
 
     <!-- Results -->
+    <div id="confetti" class="confetti hidden" aria-hidden="true"></div>
     <section id="results" class="panel ui results hidden" aria-label="Round results">
+      <div class="inner">
       <h2 id="results-title">Results</h2>
       <p id="results-sub" class="sub"></p>
       <ol id="results-table" class="standings"></ol>
@@ -97,6 +101,7 @@
         <button id="lobby-btn" class="secondary">Change competition</button>
       </div>
       <p id="round-id" class="round-id"></p>
+      </div>
     </section>
 
     <!-- Tutorial -->

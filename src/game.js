@@ -355,7 +355,7 @@ export class Game {
     this.input.swipeEnabled = true;
     const c = this.player.charge;
     if (c >= 0.97) this.ui.feed('Full power!', 'great');
-    this.ui.feed('Swipe = trick · hold = rotate · tap = streamline', 'hint');
+    this.ui.feed('Swipe: trick · Hold: rotate · Tap: streamline', 'hint');
   }
 
   onDiverEvent(type, data, diver) {
@@ -514,7 +514,6 @@ export class Game {
     if (me.rank !== r.position) console.warn('Outcome mismatch', me.rank, r.position);
     this.after(0.4, () => {
       this.ui.showResults({ standings, playerRank: me.rank, stake: r.stake, multiplier, payout, unlockedComp, roundId: r.id, comp: r.comp });
-      if (unlockedComp) this.ui.toast(`Unlocked ${unlockedComp.short}!`, 'gold');
     });
   }
 

@@ -59,6 +59,7 @@ export class UI {
       gestureList: $('#gesture-list'),
       tutorialGestures: $('#tutorial-gestures'),
       installBtn: $('#install-btn'),
+      confetti: $('#confetti'),
     };
     this.handlers = {};
     this.selectedComp = 0;
@@ -109,7 +110,7 @@ export class UI {
       const odds = oddsFor(c);
       const top = odds.multipliers[0];
       const cls = ['comp-card', locked ? 'locked' : '', i === selected ? 'selected' : ''].join(' ');
-      return `<button class="${cls}" data-index="${i}" ${locked ? 'disabled' : ''} aria-pressed="${i === selected}">
+      return `<button class="${cls}" data-index="${i}" data-tier="${i}" ${locked ? 'disabled' : ''} aria-pressed="${i === selected}">
         <span class="comp-height">${c.height}m</span>
         <span class="comp-name">${c.name}</span>
         <span class="comp-top">Top prize <b>${top}x</b></span>
@@ -145,7 +146,7 @@ export class UI {
     const rows = odds.multipliers
       .map((m, i) => {
         const p = odds.probabilities[i] * 100;
-        return `<tr class="${m > 1 ? 'win' : m > 0 ? 'partial' : 'lose'}"><td>${labels[i]}</td><td>${m}x</td><td>${fmtMoney(m * stake)}</td><td><span class="bar" style="width:${p.toFixed(1)}%"></span>${p.toFixed(1)}%</td></tr>`;
+        return `<tr class="${m > 1 ? 'win' : m > 0 ? 'partial' : 'lose'}"><td>${labels[i]}</td><td>${m}x</td><td>${fmtMoney(m * stake)}</td><td><span class="bar" style="width:${p.toFixed(1)}%"></span><span class="pct">${p.toFixed(1)}%</span></td></tr>`;
       })
       .join('');
     this.el.oddsTable.innerHTML = `<thead><tr><th>Place</th><th>Prize</th><th>Pays</th><th>Chance</th></tr></thead><tbody>${rows}</tbody>`;
@@ -163,7 +164,7 @@ export class UI {
       return;
     }
     p.textContent = text;
-    p.className = `prompt ${cls}`;
+    p.className = `prompt outline-text ${cls}`;
     p.classList.remove('hidden');
   }
 
@@ -244,8 +245,9 @@ export class UI {
     const rows = [...scored, ...pending]
       .map((e, i) => {
         const rank = e.score != null ? i + 1 : '';
+        const medal = rank && rank <= 3 ? ` medal m${rank}` : '';
         return `<li class="${e.isPlayer ? 'me' : ''} ${e.active ? 'active' : ''} ${e.score == null ? 'pending' : ''}">
-          <span class="rank">${rank || '·'}</span>
+          <span class="rank${medal}">${rank || '·'}</span>
           <span class="dot" style="background:${e.color}"></span>
           <span class="name">${e.isPlayer ? 'You' : e.name}</span>
           <span class="score">${e.score == null ? (e.active ? 'diving…' : '—') : fmtScore(e.score)}</span>
@@ -262,9 +264,11 @@ export class UI {
     this.el.judgeMarks.forEach((m, i) => {
       m.textContent = '';
       m.classList.remove('pop');
+      m.parentElement.classList.remove('up');
       setTimeout(() => {
         m.textContent = marks[i].toFixed(2);
         m.classList.add('pop');
+        m.parentElement.classList.add('up');
       }, 250 + i * 320);
     });
     this.el.judgesTotal.textContent = '';
@@ -278,18 +282,20 @@ export class UI {
 
   hideJudges() {
     this.el.judges.classList.add('hidden');
+    for (const m of this.el.judgeMarks) m.parentElement.classList.remove('up');
   }
 
   // ---- results ------------------------------------------------------------
   showResults({ standings, playerRank, stake, multiplier, payout, unlockedComp, roundId, comp }) {
     const ordinal = ['1st', '2nd', '3rd', '4th'][playerRank - 1];
-    const titles = ['🏆 You won!', '🥈 Second place', '🥉 Third place', 'Fourth place'];
-    this.el.resultsTitle.textContent = titles[playerRank - 1];
+    const titles = ['You won!', 'Second place', 'Third place', 'Fourth place'];
+    const medalCls = ['m1', 'm2', 'm3', ''][playerRank - 1];
+    this.el.resultsTitle.innerHTML = `${medalCls ? `<span class="medal-big rank medal ${medalCls}">${playerRank}</span>` : ''}<span>${titles[playerRank - 1]}</span>`;
     this.el.resultsSub.textContent = `${ordinal} in the ${comp.name}`;
     this.el.resultsTable.innerHTML = standings
       .map(
         (s) => `<li class="${s.isPlayer ? 'me' : ''}">
-          <span class="rank">${s.rank}</span>
+          <span class="rank${s.rank <= 3 ? ` medal m${s.rank}` : ''}">${s.rank}</span>
           <span class="dot" style="background:${s.color}"></span>
           <span class="name">${s.isPlayer ? 'You' : s.name}</span>
           <span class="marks">${s.marks.map((m) => m.toFixed(1)).join(' · ')}</span>
@@ -305,16 +311,40 @@ export class UI {
         : `<span class="mult">0x</span><span class="amt">No prize</span><span class="net">-${fmtMoney(stake)} net</span>`;
     if (unlockedComp) {
       this.el.resultsUnlock.classList.remove('hidden');
-      this.el.resultsUnlock.innerHTML = `🔓 <b>Unlocked:</b> ${unlockedComp.name} (${unlockedComp.height}m)`;
+      this.el.resultsUnlock.innerHTML = `<b>Unlocked!</b> ${unlockedComp.name} (${unlockedComp.height}m)`;
     } else {
       this.el.resultsUnlock.classList.add('hidden');
     }
     this.el.roundId.textContent = `Round ${roundId}`;
     this.el.results.classList.remove('hidden');
+    if (playerRank === 1) this.confetti();
+  }
+
+  confetti(count = 70) {
+    const box = this.el.confetti;
+    const colors = ['#ffd84d', '#ff6b57', '#4fb0ea', '#6cc24a', '#b16cea', '#fff8ea'];
+    box.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+      const p = document.createElement('i');
+      p.style.left = `${Math.random() * 100}%`;
+      p.style.background = colors[i % colors.length];
+      p.style.animationDuration = `${2.2 + Math.random() * 1.8}s`;
+      p.style.animationDelay = `${Math.random() * 0.8}s`;
+      p.style.transform = `rotate(${Math.random() * 360}deg)`;
+      if (Math.random() < 0.3) p.style.borderRadius = '50%';
+      box.appendChild(p);
+    }
+    box.classList.remove('hidden');
+    clearTimeout(this.confettiTimer);
+    this.confettiTimer = setTimeout(() => {
+      box.classList.add('hidden');
+      box.innerHTML = '';
+    }, 5000);
   }
 
   hideResults() {
     this.el.results.classList.add('hidden');
+    this.el.confetti.classList.add('hidden');
   }
 
   // ---- tutorial / toasts --------------------------------------------------
