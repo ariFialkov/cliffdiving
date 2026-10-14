@@ -198,17 +198,6 @@ export class Renderer {
         ctx.closePath();
         ctx.fill();
       }
-      // Treeline at the far shore
-      ctx.fillStyle = '#5c9d82';
-      for (let x = w * 0.3 + px; x < w + 40; x += 11) {
-        const th = ppm * (0.5 + hash(x) * 0.5);
-        ctx.beginPath();
-        ctx.moveTo(x - 6, waterY);
-        ctx.lineTo(x, waterY - th);
-        ctx.lineTo(x + 6, waterY);
-        ctx.closePath();
-        ctx.fill();
-      }
     } else if (b.kind === 'hills') {
       for (let i = 0; i < 4; i++) {
         const bx = w * 0.45 + i * w * 0.24 + px;
@@ -291,14 +280,6 @@ export class Renderer {
       ctx.lineTo(w, h);
       ctx.closePath();
       ctx.fill();
-      // Sun sparkle on the surface
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
-      for (let i = 0; i < 14; i++) {
-        const x = ((hash(i) * 2 + t * 0.03 * (1 + (i % 3))) % 1.2) * w;
-        const y = waterY + ppm * (0.4 + hash(i + 50) * 2.5);
-        const len = ppm * (0.2 + hash(i + 90) * 0.5) * (0.6 + 0.4 * Math.sin(t * 2 + i));
-        ctx.fillRect(x, y, len, 2);
-      }
     } else {
       ctx.fillStyle = wc.front;
       ctx.beginPath();
@@ -463,9 +444,11 @@ export class Renderer {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
     for (let m = 5; m < H; m += 5) {
-      const [mx, my] = this.toScreen(cliffFaceX(m, H, rock), m);
-      ctx.fillRect(mx - ppm * 0.5, my - 1, ppm * 0.4, 2);
-      ctx.fillText(`${H - m}m`, mx - ppm * 0.6, my);
+      const [mx0, my0] = this.toScreen(cliffFaceX(m, H, rock), m);
+      const mx = Math.round(mx0);
+      const my = Math.round(my0);
+      ctx.fillRect(Math.round(mx - ppm * 0.5), my - 1, Math.round(ppm * 0.4), 2);
+      ctx.fillText(`${H - m}m`, Math.round(mx - ppm * 0.6), my);
     }
   }
 
@@ -774,12 +757,13 @@ export class Renderer {
     if (!comp) return;
     const x = world.floatieX ?? 18;
     const bob = Math.sin(this.time * 1.6 + x * 1.3) * 0.06;
-    const tilt = Math.sin(this.time * 1.6 + 0.8) * 0.04;
-    const [fx, fy] = this.toScreen(x, world.height + bob);
+    const [fx0, fy0] = this.toScreen(x, world.height + bob);
+    // Whole device pixels and no tilt: keeps the logo lettering crisp instead of shimmering.
+    const fx = Math.round(fx0 * this.dpr) / this.dpr;
+    const fy = Math.round(fy0 * this.dpr) / this.dpr;
     if (fx < -ppm * 4 || fx > this.w + ppm * 4 || fy < -ppm * 4 || fy > this.h + ppm * 4) return;
     ctx.save();
     ctx.translate(fx, fy);
-    ctx.rotate(tilt);
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const kind = theme.floatie;
@@ -913,11 +897,26 @@ export class Renderer {
     ctx.restore();
   }
 
+  /**
+   * Draw a tournament logo into a w×h box centred on (cx, cy). The logo is
+   * rasterised at exactly its on-screen device-pixel size and placed on whole
+   * device pixels, so fine lettering never resamples (shimmers) as things move.
+   */
   blitLogo(ctx, id, cx, cy, w, h) {
-    const px = Math.min(1024, Math.max(128, Math.round(w * this.dpr * 1.2)));
+    const m = ctx.getTransform();
+    const scale = Math.hypot(m.a, m.b) || 1; // device px per canvas unit
+    const boxW = Math.min(w, h * 2); // logos are 2:1
+    const px = Math.max(32, Math.min(2048, Math.round(boxW * scale)));
     const img = logoCanvas(id, px);
-    const s = Math.min(w / img.width, h / img.height);
-    ctx.drawImage(img, cx - (img.width * s) / 2, cy - (img.height * s) / 2, img.width * s, img.height * s);
+    const dw = img.width / scale;
+    const dh = img.height / scale;
+    let x = cx - dw / 2;
+    let y = cy - dh / 2;
+    if (Math.abs(m.b) < 1e-9 && Math.abs(m.c) < 1e-9) {
+      x = (Math.round(m.a * x + m.e) - m.e) / m.a;
+      y = (Math.round(m.d * y + m.f) - m.f) / m.d;
+    }
+    ctx.drawImage(img, x, y, dw, dh);
   }
 
   drawDiver(ctx, d, world) {

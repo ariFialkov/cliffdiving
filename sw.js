@@ -1,5 +1,5 @@
 // Service worker: precache the app shell so the game works offline.
-const CACHE = 'cliffdiving-v6';
+const CACHE = 'cliffdiving-v7';
 const ASSETS = [
   './',
   './index.html',
