@@ -772,7 +772,7 @@ export class Renderer {
     const ppm = this.camera.ppm;
     const comp = world.comp;
     if (!comp) return;
-    const x = 6.4;
+    const x = world.floatieX ?? 18;
     const bob = Math.sin(this.time * 1.6 + x * 1.3) * 0.06;
     const tilt = Math.sin(this.time * 1.6 + 0.8) * 0.04;
     const [fx, fy] = this.toScreen(x, world.height + bob);

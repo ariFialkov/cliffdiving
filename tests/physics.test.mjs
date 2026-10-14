@@ -175,3 +175,27 @@ test('bots line up their planned entry with hold-to-rotate', () => {
   assert.ok(checked >= 30, `only ${checked} bots aimed`);
   assert.ok(headFirstSeen > 0, 'some bots go in head-first');
 });
+
+test('no diver can ever reach the branded floatie, at any venue', async () => {
+  const { FLOATIE_HALF_WIDTH } = await import('../src/world.js');
+  for (let ci = 0; ci < COMPETITIONS.length; ci++) {
+    for (const charge of [0, 0.5, 1]) {
+      const w = new World();
+      w.setCompetition(COMPETITIONS[ci]);
+      const d = new Diver({ id: 'p', name: 'P', color: '#f00', x: -0.3 });
+      d.setState('ready');
+      w.divers.push(d);
+      d.startCharge(charge);
+      let maxX = -Infinity;
+      for (let t = 0; t < 14 && d.state !== 'gone'; t += DT) {
+        w.update(DT);
+        if (d.state === 'airborne' && !d.locked && d.impactT - d.airT < 0.2) d.lock();
+        for (const p of Object.values(d.rig.points)) if (p && typeof p.x === 'number') maxX = Math.max(maxX, p.x);
+        for (const n of d.rig.hair.nodes ?? []) maxX = Math.max(maxX, n.x);
+      }
+      assert.equal(d.state, 'gone');
+      const floatieLeft = w.floatieX - FLOATIE_HALF_WIDTH;
+      assert.ok(maxX < floatieLeft - 0.5, `${COMPETITIONS[ci].id} charge ${charge}: diver reached ${maxX.toFixed(2)}, floatie starts at ${floatieLeft.toFixed(2)}`);
+    }
+  }
+});

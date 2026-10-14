@@ -5,7 +5,7 @@ import { COMPETITIONS, drawPosition, oddsFor, placeBotScores, rankScores } from 
 import { mulberry32, secureSeed, seedToId } from './rng.js';
 import { TRICKS, sequenceDifficulty } from './tricks.js';
 import { entryQuality, judgeDive, synthesizeBotDive, LOCK_WINDOW, LOCK_SWEET } from './scoring.js';
-import { Diver, World, makeBotPlan, entryTilt } from './world.js';
+import { Diver, World, makeBotPlan, entryTilt, START_X } from './world.js';
 import { HAIR_STYLES, PLAYER_HAIR } from './rig.js';
 
 const BOT_POOL = [
@@ -20,7 +20,7 @@ const BOT_POOL = [
 ];
 
 const PLAYER_COLOR = '#e03e3e';
-const EDGE_X = -0.3;
+const EDGE_X = START_X;
 const QUEUE_X = [-2.3, -3.7, -5.1];
 const DIVE_CLOCK = 10;
 const START_BALANCE = 1000;

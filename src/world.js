@@ -16,6 +16,11 @@ export const CHARGE_TIME = 1.0; // seconds of holding for full power
 const MIN_CROUCH = 0.12; // a tap still dips before leaving the ground
 const LAUNCH_TIME = 0.1;
 const SURFACE_TIME = 0.8;
+export const SWIM_SPEED = 1.5;
+export const SWIM_TIME = 2.5; // the camera leaves the landing before the swimmer is done
+export const START_X = -0.3; // the diving spot at the cliff edge
+export const FLOATIE_HALF_WIDTH = 2.3; // widest branded floatie (the Blue Horse pontoon)
+const FLOATIE_MARGIN = 1.5;
 
 // Rotation physics (pitch). A trick sets an angular momentum L (expressed as
 // the spin rate, deg/s, the body would have when fully open). Folding into a
@@ -307,10 +312,10 @@ export class Diver {
         this.updateSurfacing(dt, env);
         break;
       case 'swimming':
-        this.x += 1.5 * dt;
+        this.x += SWIM_SPEED * dt;
         this.y = env.height + 0.1 + Math.sin(this.stateT * 5.2) * 0.025;
         this.angle = this.swimPitch + Math.sin(this.stateT * 5.2) * 3;
-        if (this.stateT > 4) this.setState('gone');
+        if (this.stateT > SWIM_TIME) this.setState('gone');
         break;
       default:
         break;
@@ -619,6 +624,22 @@ export class World {
     const drop = comp.height - IMPACT_OFFSET + HIP_HEIGHT;
     this.gravity = (2 * (drop - JUMP_VY * comp.airTime)) / (comp.airTime * comp.airTime);
     this.airTime = comp.airTime;
+    // The branded floatie sits beyond anywhere a diver can reach, so nobody ever lands on it.
+    this.floatieX = this.maxReachX() + FLOATIE_HALF_WIDTH + FLOATIE_MARGIN;
+  }
+
+  /**
+   * The farthest x any diver can reach at this venue: a full-power jump,
+   * the drift through the water entry and surfacing, and the swim-off.
+   */
+  maxReachX() {
+    const { vx } = jumpVelocity(1);
+    const T = this.airTimeFor(1) + 0.15;
+    const launch = 0.1 * (0.4 + 0.6);
+    const flight = (vx * (1 - Math.exp(-0.08 * T))) / 0.08;
+    const entry = 0.9 * (0.2 + vx * 0.1) + 0.6 * SURFACE_TIME;
+    const reach = 0.9; // arms and hands extend past the hip
+    return START_X + launch + flight + entry + SWIM_SPEED * SWIM_TIME + reach;
   }
 
   /** Seconds in the air for a jump at the given charge (0..1). */

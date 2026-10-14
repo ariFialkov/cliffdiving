@@ -6,6 +6,8 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
+    "build": "node scripts/build.mjs",
+    "preview": "node server.js dist",
     "test": "node --test"
   },
   "license": "UNLICENSED"

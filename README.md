@@ -136,7 +136,8 @@ src/world.js          physics, diver state, bot autopilot, splashes
 src/render.js         canvas renderer (cliff, water, stickmen, camera)
 src/input.js          taps, no-click mouse swipes, touch swipes, keyboard
 src/ui.js             DOM overlays
-sw.js, manifest.webmanifest, icons/   PWA
+sw.js, manifest.json, icons/   PWA
+scripts/build.mjs     copies the playable files into dist/
 tests/                node:test unit tests
 ```
 
